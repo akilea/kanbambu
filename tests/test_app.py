@@ -21,6 +21,9 @@ SLICE_INFO = """<?xml version="1.0" encoding="UTF-8"?>
     <metadata key="index" value="1"/>
     <metadata key="prediction" value="5400"/>
     <metadata key="weight" value="42.50"/>
+    <object identify_id="1" name="a" skipped="false"/>
+    <object identify_id="2" name="b" skipped="false"/>
+    <object identify_id="3" name="c" skipped="true"/>
     <filament id="1" type="PLA" color="#FFFFFF" used_m="10.20" used_g="30.40"/>
     <filament id="3" type="PETG" color="#FF0000" used_m="4.00" used_g="12.10"/>
   </plate>
@@ -63,6 +66,30 @@ def test_parse(tmp_path):
     assert white["g"] == 35.4 and white["profile"] == "Bambu PLA Basic"
     red = next(f for f in a["filaments"] if f["type"] == "PETG")
     assert red["profile"] == "Generic PETG"
+    assert a["objects"] == 2
+
+
+def test_plates():
+    c = TestClient(app)
+    p = c.post("/api/projects", json={"name": "Mur"}).json()
+    card = c.post("/api/cards", json={"project_id": p["id"], "title": "Crochet"}).json()
+    assert (card["plates"], card["plates_left"]) == (1, 1)
+    card = c.patch(f"/api/cards/{card['id']}", json={"qty": 10}).json()
+    # sliced plate with 2 objects -> 2 copies per plate, 5 plates
+    c.post("/api/upload", data={"card_id": card["id"], "role": "attach"},
+           files={"file": ("crochet.gcode.3mf", make_3mf(True))})
+    card = c.get("/api/board").json()["projects"][0]["cards"][0]
+    assert (card["per_plate"], card["plates"], card["plates_left"]) == (2, 5, 5)
+    mv = lambda lane, **kw: c.post("/api/cards/move", json={  # noqa: E731
+        "card_id": card["id"], "project_id": p["id"], "lane": lane, "ids": [card["id"]], **kw}).json()
+    mv("printing"); out = mv("done", result="success")
+    assert (out["plates_done"], out["plates_left"]) == (1, 4)
+    mv("printing"); out = mv("done", result="fail", note="Décollé")      # a fail is not a plate
+    assert out["plates_left"] == 4
+    c.patch(f"/api/cards/{card['id']}", json={"per_plate": 5})            # 2 plates total
+    mv("printing", change="Colle"); out = mv("done", result="success")
+    assert (out["plates"], out["plates_done"], out["plates_left"]) == (2, 2, 0)
+    c.delete(f"/api/projects/{p['id']}")
 
 
 def test_flow():

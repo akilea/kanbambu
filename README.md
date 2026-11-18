@@ -43,7 +43,20 @@ miniature comme aperçu, et passe la carte de Park à Analysed.
 
 Un `.3mf` de projet normal ne contient pas les grammes. Il donne seulement la miniature.
 
-L'en-tête affiche le total de filament par couleur pour tout ce qui est en Analysed et Printing (× quantité).
+L'en-tête affiche le total de filament par couleur pour tout ce qui est en Analysed et Printing (plateaux restants).
+
+### Copies et plateaux
+
+Dans la fiche d'une carte : 📦 nombre de copies à imprimer, ▦ copies par plateau. kanbambu en déduit le nombre
+de plateaux (affiché `fait/total` sur la carte). Quand un `.gcode.3mf` contient plusieurs objets, les copies par
+plateau sont remplies automatiquement (modifiable).
+
+Chaque ✓ dans Done compte un plateau ; un ✗ ne compte pas. Tant qu'il reste des plateaux, la carte en Done a une
+bordure pointillée orange et un bouton 🖨️+ qui la renvoie directement dans Printing (pas besoin d'expliquer un
+changement : ce n'est pas un réessai). Glisser la carte hors de Done fait la même chose. Le temps, le poids et le
+total de filament de l'en-tête comptent seulement les plateaux restants.
+
+Une carte = un plateau tranché (`Export plate sliced file`).
 
 ### Done et réessais
 

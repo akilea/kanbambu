@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS cards (
     title TEXT NOT NULL,
     lane TEXT NOT NULL DEFAULT 'park',
     position INTEGER DEFAULT 0,
-    qty INTEGER DEFAULT 1,
+    qty INTEGER DEFAULT 1,          -- copies wanted
+    per_plate INTEGER DEFAULT 1,    -- copies per plate
     url TEXT DEFAULT '',
     notes TEXT DEFAULT '',
     preview_file_id INTEGER,
@@ -60,6 +61,9 @@ def init():
     os.makedirs(FILES_DIR, exist_ok=True)
     with conn() as c:
         c.executescript(SCHEMA)
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(cards)")}
+        if "per_plate" not in cols:  # migration for databases created before plates existed
+            c.execute("ALTER TABLE cards ADD COLUMN per_plate INTEGER DEFAULT 1")
 
 
 @contextmanager

@@ -70,6 +70,8 @@ main { padding: 0 16px 40px; }
 .card[data-lane="printing"] { border-left-color: var(--printing); }
 .card[data-lane="done"] { border-left-color: var(--done); }
 .card.failed { border-left-color: var(--fail); }
+.card.partial { border-left-color: var(--printing); border-left-style: dashed; }
+.reprint { margin-left: auto; color: var(--printing); border: 1px solid var(--printing); }
 .card:hover { border-color: var(--mute); }
 .card .thumb { width: 52px; height: 52px; border-radius: 6px; object-fit: contain; background: var(--bg); flex: none; }
 .card .c-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
@@ -99,7 +101,7 @@ input.num { width: 58px; text-align: center; }
 .li { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 6px; }
 .li:hover { background: var(--bg); }
 .li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.li .sub { color: var(--mute); font-size: 12px; font-variant-numeric: tabular-nums; }
+.sub, .li .sub { color: var(--mute); font-size: 12px; font-variant-numeric: tabular-nums; }
 .drop-zone { border: 1.5px dashed var(--line); border-radius: 8px; padding: 10px; text-align: center; color: var(--mute); cursor: pointer; }
 .drop-zone:hover, .drop-zone.over { border-color: var(--analysed); color: var(--analysed); }
 .big-img { width: 96px; height: 96px; border-radius: 10px; object-fit: contain; background: var(--bg); cursor: pointer; flex: none;

@@ -66,8 +66,10 @@ def _slice_info(z: zipfile.ZipFile, names: set) -> Optional[dict]:
     profiles = _profile_names(z, names)
     plates = []
     totals: dict = {}
+    objects = 0
     for plate in root.findall("plate"):
         m = _meta(plate)
+        objects += sum(1 for o in plate.findall("object") if o.get("skipped", "false") != "true")
         fils = []
         for f in plate.findall("filament"):
             fid = _num(f.get("id"), int, 0)
@@ -98,4 +100,5 @@ def _slice_info(z: zipfile.ZipFile, names: set) -> Optional[dict]:
         "g": round(sum(p["g"] or sum(f["g"] for f in p["filaments"]) for p in plates), 2),
         "plates": plates,
         "filaments": sorted(totals.values(), key=lambda t: -t["g"]),
+        "objects": objects,
     }

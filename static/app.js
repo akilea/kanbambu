@@ -56,7 +56,7 @@ function renderTotals() {
         for (const f of c.analysis.filaments) {
           const k = f.color.toUpperCase() + f.type;
           t[k] ??= { ...f, g: 0 };
-          t[k].g += f.g * (c.qty || 1);
+          t[k].g += f.g * (c.plates_left || 0);
         }
   $("#totals").innerHTML = Object.values(t)
     .sort((a, b) => b.g - a.g)
@@ -102,10 +102,12 @@ function cardHtml(c) {
   const a = c.analysis;
   const last = c.attempts[c.attempts.length - 1];
   const failed = c.lane === "done" && last && last.result === "fail";
+  const canReprint = c.lane === "done" && last && last.result === "success" && c.plates_left > 0;
+  const mult = c.plates_left || c.plates || 1;
   const models = c.files.filter((f) => f.kind !== "image");
   const bambu = [...c.files].reverse().find(isBambu);
   return `
-  <div class="card ${failed ? "failed" : ""}" data-id="${c.id}" data-lane="${c.lane}">
+  <div class="card ${failed ? "failed" : ""} ${canReprint ? "partial" : ""}" data-id="${c.id}" data-lane="${c.lane}">
     ${c.preview ? `<img class="thumb" src="${c.preview}" alt="" loading="lazy">` : ""}
     <div class="c-body">
       <div class="c-title">${esc(c.title)}${c.qty > 1 ? `<span class="qty">×${c.qty}</span>` : ""}</div>
@@ -113,12 +115,14 @@ function cardHtml(c) {
         ${models.length ? `<span title="${esc(models.map((f) => f.name).join("\n"))}">${ic(fileIcon(models[0].kind), "sm")}${models.length > 1 ? models.length : ""}</span>` : ""}
         ${c.url ? `<a class="ib" href="${esc(c.url)}" target="_blank" rel="noopener" title="Lien" onclick="event.stopPropagation()">${ic("link", "sm")}</a>` : ""}
         ${bambu ? bambuBtn(bambu) : ""}
-        ${a && a.time_s ? `<span>${ic("clock", "sm")} ${fmtTime(a.time_s * (c.qty || 1))}</span>` : ""}
-        ${a && a.g ? `<span>${ic("weight", "sm")} ${fmtG(a.g * (c.qty || 1))}</span>` : ""}
+        ${c.plates > 1 || c.plates_done ? `<span title="Plateaux imprimés / total">${ic("layers", "sm")} ${c.plates_done}/${c.plates}</span>` : ""}
+        ${a && a.time_s ? `<span title="Temps restant">${ic("clock", "sm")} ${fmtTime(a.time_s * mult)}</span>` : ""}
+        ${a && a.g ? `<span title="Filament restant">${ic("weight", "sm")} ${fmtG(a.g * mult)}</span>` : ""}
         ${a ? a.filaments.map((f) => `<span class="dot" style="background:${esc(f.color)}" title="${esc(f.type)} ${fmtG(f.g)}"></span>`).join("") : ""}
         ${c.pending_change ? `<span class="retry" title="${esc(c.pending_change)}">${ic("rotate-ccw", "sm")}</span>` : ""}
         ${c.ok ? `<span class="ok">${ic("circle-check", "sm")}${c.ok}</span>` : ""}
         ${c.ko ? `<span class="ko">${ic("circle-x", "sm")}${c.ko}</span>` : ""}
+        ${canReprint ? `<button class="ib reprint" data-reprint title="Imprimer le plateau suivant">${ic("printer", "sm")}${ic("plus", "sm")}</button>` : ""}
       </div>
     </div>
   </div>`;
@@ -170,6 +174,7 @@ function wire() {
       return;
     }
     const card = e.target.closest(".card");
+    if (card && e.target.closest("[data-reprint]")) return reprint(findCard(card.dataset.id));
     if (card) cardModal(findCard(card.dataset.id));
   };
 }
@@ -211,8 +216,19 @@ function onCardDrop(e) {
   const move = (extra = {}) => api("POST", "/api/cards/move", { card_id: id, project_id, lane, ids, ...extra }).then(load);
   if (lane === card.lane) return move();
   if (lane === "done") return doneModal(card, (result, note) => move({ result, note }), load);
-  if (card.lane === "done") return retryModal(card, (change) => move({ change }), load);
+  if (card.lane === "done") {
+    const last = card.attempts[card.attempts.length - 1];
+    if (last && last.result === "success" && card.plates_left > 0) return move(); // next plate, not a retry
+    return retryModal(card, (change) => move({ change }), load);
+  }
   return move();
+}
+
+/* Next plate of a partially printed card: straight back to Printing. */
+function reprint(card) {
+  const lane = $(`.lane[data-lane="printing"][data-project="${card.project_id}"]`);
+  const ids = [...lane.children].map((x) => +x.dataset.id).concat(card.id);
+  return api("POST", "/api/cards/move", { card_id: card.id, project_id: card.project_id, lane: "printing", ids }).then(load);
 }
 
 function newCardInput(btn, p) {
@@ -316,8 +332,13 @@ function cardModal(c) {
     <div class="row" style="align-items:flex-start">
       <div class="big-img" id="prev" title="Image">${c.preview ? `<img src="${c.preview}" style="width:100%;height:100%;object-fit:contain;border-radius:10px">` : ic("image", "lg")}</div>
       <div class="sec" style="flex:1">
-        <div class="row"><input class="title" id="title" value="${esc(c.title)}">
-          <span title="Quantité">×</span><input class="num" id="qty" type="number" min="1" value="${c.qty}"></div>
+        <div class="row"><input class="title" id="title" value="${esc(c.title)}"></div>
+        <div class="row">
+          <span title="Copies à imprimer">${ic("package")}</span><input class="num" id="qty" type="number" min="1" value="${c.qty}">
+          <span title="Copies par plateau">${ic("layers")}</span><input class="num" id="per" type="number" min="1" value="${c.per_plate}">
+          <span class="sub" title="Plateaux imprimés / total">= ${c.plates_done}/${c.plates} ${ic("layers", "sm")}</span>
+          ${c.lane === "done" && c.plates_left > 0 && c.attempts.at(-1)?.result === "success" ? `<button class="btn" id="reprint" title="Imprimer le plateau suivant">${ic("printer")}${ic("plus", "sm")}</button>` : ""}
+        </div>
         <div class="row">${ic("link")}<input id="url" type="url" placeholder="https://" value="${esc(c.url)}">
           ${c.url ? `<a class="ib" href="${esc(c.url)}" target="_blank" rel="noopener">${ic("external-link")}</a>` : ""}</div>
       </div>
@@ -376,7 +397,10 @@ function cardModal(c) {
 
   const patch = (body) => api("PATCH", `/api/cards/${c.id}`, body);
   $("#title", s).onchange = (e) => patch({ title: e.target.value.trim() || c.title });
-  $("#qty", s).onchange = (e) => patch({ qty: Math.max(1, +e.target.value || 1) });
+  const refreshCard = async () => { BOARD = await api("GET", "/api/board"); cardModal(findCard(c.id)); };
+  $("#qty", s).onchange = (e) => patch({ qty: Math.max(1, +e.target.value || 1) }).then(refreshCard);
+  $("#per", s).onchange = (e) => patch({ per_plate: Math.max(1, +e.target.value || 1) }).then(refreshCard);
+  if ($("#reprint", s)) $("#reprint", s).onclick = () => { closeModal(true); reprint(c); };
   $("#url", s).onchange = (e) => patch({ url: e.target.value.trim() });
   $("#notes", s).onchange = (e) => patch({ notes: e.target.value });
   $("#close", s).onclick = () => closeModal();

@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 import uuid
@@ -70,15 +71,19 @@ def card_dict(c, r) -> dict:
         (r["id"], r["preview_file_id"]))]
     attempts = [dict(a) for a in c.execute(
         "SELECT * FROM attempts WHERE card_id=? ORDER BY id", (r["id"],))]
+    ok = sum(a["result"] == "success" for a in attempts)
+    per = max(1, r["per_plate"] or 1)
+    total = max(1, math.ceil((r["qty"] or 1) / per))
     return {
         "id": r["id"], "project_id": r["project_id"], "title": r["title"], "lane": r["lane"],
-        "qty": r["qty"], "url": r["url"], "notes": r["notes"],
+        "qty": r["qty"], "per_plate": per, "url": r["url"], "notes": r["notes"],
+        "plates": total, "plates_done": min(ok, total), "plates_left": max(0, total - ok),
         "preview": f"/files/{r['preview_file_id']}/preview" if r["preview_file_id"] else None,
         "preview_file_id": r["preview_file_id"],
         "analysis": json.loads(r["analysis"]) if r["analysis"] else None,
         "pending_change": r["pending_change"],
         "files": files, "attempts": attempts,
-        "ok": sum(a["result"] == "success" for a in attempts),
+        "ok": ok,
         "ko": sum(a["result"] == "fail" for a in attempts),
     }
 
@@ -171,6 +176,7 @@ class CardIn(BaseModel):
     url: Optional[str] = None
     notes: Optional[str] = None
     qty: Optional[int] = None
+    per_plate: Optional[int] = None
     analysis: Optional[dict] = None
 
 
@@ -293,6 +299,10 @@ async def upload(file: UploadFile = File(...), project_id: Optional[int] = Form(
             if info["analysis"]:
                 with db.conn() as c:
                     c.execute("UPDATE cards SET analysis=? WHERE id=?", (json.dumps(info["analysis"]), card_id))
+                    # Several objects on the plate: assume each is one copy, unless already set by hand.
+                    n = info["analysis"].get("objects", 0)
+                    if n > 1 and (card["per_plate"] or 1) == 1:
+                        c.execute("UPDATE cards SET per_plate=? WHERE id=?", (n, card_id))
                     if card["lane"] == "park":
                         pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM cards "
                                         "WHERE project_id=? AND lane='analysed'", (card["project_id"],)).fetchone()[0]
