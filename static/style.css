@@ -114,3 +114,22 @@ input.num { width: 58px; text-align: center; }
 .empty { text-align: center; color: var(--mute); padding: 60px 0; }
 .attempt .change { color: var(--printing); }
 .bom-done .name { text-decoration: line-through; color: var(--mute); }
+
+/* phone: lanes scroll sideways inside each project */
+.lane-tag { display: none; }
+@media (max-width: 760px) {
+  .top { padding: 8px 10px; gap: 8px; }
+  .lanes-head { display: none; }
+  main { padding: 8px 8px 40px; }
+  .p-body { display: grid; grid-template-columns: repeat(4, 82%); overflow-x: auto; scroll-snap-type: x mandatory;
+            padding-bottom: 12px; -webkit-overflow-scrolling: touch; }
+  .lane-wrap { scroll-snap-align: start; }
+  .lane-tag { display: flex; gap: 4px; align-items: center; font-size: 11px; font-weight: 600; text-transform: uppercase; padding: 2px 4px 4px; }
+  .lane-wrap:nth-child(1) .lane-tag { color: var(--park); }
+  .lane-wrap:nth-child(2) .lane-tag { color: var(--analysed); }
+  .lane-wrap:nth-child(3) .lane-tag { color: var(--printing); }
+  .lane-wrap:nth-child(4) .lane-tag { color: var(--done); }
+  .p-head { flex-wrap: wrap; }
+  .modal { padding: 0; align-items: stretch; }
+  .sheet { border-radius: 0; min-height: 100%; }
+}

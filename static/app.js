@@ -90,6 +90,7 @@ function projectHtml(p) {
     <div class="p-body">
       ${LANES.map((l) => `
         <div class="lane-wrap">
+          <div class="lane-tag">${ic(laneIcons[l], "sm")} ${l[0].toUpperCase() + l.slice(1)}</div>
           <div class="lane" data-lane="${l}" data-project="${p.id}">${by[l].map(cardHtml).join("")}</div>
           ${l === "park" ? `<button class="add-card" data-act="add-card" title="Nouvelle impression (ou glisse des fichiers)">${ic("plus")}</button>` : ""}
         </div>`).join("")}
@@ -132,13 +133,13 @@ function wire() {
   const board = $("#board");
 
   Sortable.create(board, {
-    handle: ".p-grip", animation: 150, draggable: ".project",
+    handle: ".p-grip", animation: 150, draggable: ".project", delay: 150, delayOnTouchOnly: true,
     onEnd: () => api("POST", "/api/projects/order", { ids: [...board.children].map((s) => +s.dataset.id) }),
   });
 
   board.querySelectorAll(".lane").forEach((lane) => {
     Sortable.create(lane, {
-      group: "cards", animation: 150, draggable: ".card",
+      group: "cards", animation: 150, draggable: ".card", delay: 250, delayOnTouchOnly: true,
       onEnd: (e) => onCardDrop(e),
     });
     // Drop files on a lane: onto a card = attach, onto Park = new cards.
