@@ -1,0 +1,108 @@
+"""Run: KANBAMBU_DATA=$(mktemp -d) python -m pytest tests"""
+import io
+import json
+import os
+import struct
+import tempfile
+import zipfile
+import zlib
+
+os.environ.setdefault("KANBAMBU_DATA", tempfile.mkdtemp())
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app.main import app  # noqa: E402
+from app.threemf import parse_3mf  # noqa: E402
+
+SLICE_INFO = """<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <header><header_item key="X-BBL-Client-Type" value="slicer"/></header>
+  <plate>
+    <metadata key="index" value="1"/>
+    <metadata key="prediction" value="5400"/>
+    <metadata key="weight" value="42.50"/>
+    <filament id="1" type="PLA" color="#FFFFFF" used_m="10.20" used_g="30.40"/>
+    <filament id="3" type="PETG" color="#FF0000" used_m="4.00" used_g="12.10"/>
+  </plate>
+  <plate>
+    <metadata key="index" value="2"/>
+    <metadata key="prediction" value="600"/>
+    <metadata key="weight" value="5.00"/>
+    <filament id="1" type="PLA" color="#ffffff" used_m="1.70" used_g="5.00"/>
+  </plate>
+</config>"""
+
+
+def png(w=4, h=4, rgb=(34, 160, 107)) -> bytes:
+    raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))  # noqa: E731
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def make_3mf(sliced=True) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("3D/3dmodel.model", "<model/>")
+        z.writestr("Metadata/plate_1.png", png())
+        z.writestr("Metadata/project_settings.config",
+                   json.dumps({"filament_settings_id": ["Bambu PLA Basic", "x", "Generic PETG"]}))
+        if sliced:
+            z.writestr("Metadata/slice_info.config", SLICE_INFO)
+    return buf.getvalue()
+
+
+def test_parse(tmp_path):
+    p = tmp_path / "a.gcode.3mf"
+    p.write_bytes(make_3mf())
+    info = parse_3mf(str(p))
+    a = info["analysis"]
+    assert info["thumbnail"].startswith(b"\x89PNG")
+    assert a["time_s"] == 6000 and a["g"] == 47.5 and len(a["plates"]) == 2
+    white = next(f for f in a["filaments"] if f["type"] == "PLA")
+    assert white["g"] == 35.4 and white["profile"] == "Bambu PLA Basic"
+    red = next(f for f in a["filaments"] if f["type"] == "PETG")
+    assert red["profile"] == "Generic PETG"
+
+
+def test_flow():
+    c = TestClient(app)
+    p = c.post("/api/projects", json={"name": "Lampe"}).json()
+    card = c.post("/api/cards", json={"project_id": p["id"], "title": "Base"}).json()
+    assert card["lane"] == "park"
+
+    # plain project 3MF: thumbnail only, stays in Park
+    r = c.post("/api/upload", data={"card_id": card["id"], "role": "attach"},
+               files={"file": ("base.3mf", make_3mf(False))})
+    assert r.status_code == 200
+    card = next(k for k in c.get("/api/board").json()["projects"][0]["cards"])
+    assert card["lane"] == "park" and card["preview"] and card["analysis"] is None
+    assert [f["name"] for f in card["files"]] == ["base.3mf"]
+
+    # sliced plate: analysis + auto move to Analysed
+    c.post("/api/upload", data={"card_id": card["id"], "role": "attach"},
+           files={"file": ("base.gcode.3mf", make_3mf(True))})
+    card = c.get("/api/board").json()["projects"][0]["cards"][0]
+    assert card["lane"] == "analysed" and card["analysis"]["g"] == 47.5
+
+    mv = lambda lane, **kw: c.post("/api/cards/move", json={  # noqa: E731
+        "card_id": card["id"], "project_id": p["id"], "lane": lane, "ids": [card["id"]], **kw})
+    assert mv("printing").status_code == 200
+    assert mv("done").status_code == 400                      # result required
+    assert mv("done", result="fail", note="Warping").json()["ko"] == 1
+    assert mv("printing", change="Brim 5 mm").json()["pending_change"] == "Brim 5 mm"
+    out = mv("done", result="success", note="Ajouter un chanfrein").json()
+    assert (out["ok"], out["ko"]) == (1, 1)
+    assert out["attempts"][1]["change"] == "Brim 5 mm" and out["pending_change"] == ""
+
+    # project bits
+    c.patch(f"/api/projects/{p['id']}", json={"bom": [{"qty": 4, "name": "Vis M3", "done": False}],
+                                               "url": "https://makerworld.com/x"})
+    c.post("/api/upload", data={"project_id": p["id"], "role": "bambu"},
+           files={"file": ("lampe.3mf", make_3mf(False))})
+    proj = c.get("/api/board").json()["projects"][0]
+    assert proj["bom"][0]["qty"] == 4 and proj["bambu"]["name"] == "lampe.3mf" and proj["image"]
+    assert c.get(proj["bambu"]["url"]).status_code == 200
+
+    assert c.delete(f"/api/projects/{p['id']}").json()["ok"]
+    assert c.get("/api/board").json()["projects"] == []

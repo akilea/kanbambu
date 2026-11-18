@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kanbambu</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2322a06b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9V2h12v7'/><rect x='6' y='14' width='12' height='8' rx='1'/><path d='M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2'/></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><svg class="i"><use href="#i-printer"/></svg><b>kanbambu</b></div>
+    <div id="totals" class="totals" title="Filament à imprimer (Analysed + Printing)"></div>
+    <button id="addProject" class="btn primary" title="Nouveau projet"><svg class="i"><use href="#i-plus"/></svg><svg class="i"><use href="#i-folder-open"/></svg></button>
+  </header>
+  <div class="lanes-head">
+    <div><svg class="i"><use href="#i-square-parking"/></svg>Park</div>
+    <div><svg class="i"><use href="#i-scan-search"/></svg>Analysed</div>
+    <div><svg class="i"><use href="#i-printer"/></svg>Printing</div>
+    <div><svg class="i"><use href="#i-flag-triangle-right"/></svg>Done</div>
+  </div>
+  <main id="board"></main>
+  <div id="empty" class="empty" hidden>
+    <svg class="i xl"><use href="#i-folder-open"/></svg>
+    <p>Aucun projet</p>
+  </div>
+  <div id="modal" class="modal" hidden><div class="sheet"></div></div>
+  <script src="vendor/Sortable.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

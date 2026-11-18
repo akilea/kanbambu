@@ -1,0 +1,9 @@
+services:
+  kanbambu:
+    build: .
+    container_name: kanbambu
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
