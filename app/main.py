@@ -2,8 +2,9 @@ import json
 import math
 import os
 import re
+import shutil
 import uuid
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -11,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import db
-from .threemf import merge, parse_3mf
+from .threemf import merge, parse_3mf, part_name
 
 LANES = ("park", "analysed", "printing", "done")
 STATIC = os.path.join(os.path.dirname(__file__), "..", "static")
@@ -69,11 +70,19 @@ def card_dict(c, r) -> dict:
     files = [file_row(f) for f in c.execute(
         "SELECT * FROM files WHERE card_id=? AND id IS NOT ? ORDER BY id",
         (r["id"], r["preview_file_id"]))]
-    attempts = [dict(a) for a in c.execute(
-        "SELECT * FROM attempts WHERE card_id=? ORDER BY id", (r["id"],))]
+    attempts = []
+    for a in c.execute("SELECT * FROM attempts WHERE card_id=? ORDER BY id", (r["id"],)):
+        a = dict(a)
+        a["parts"] = json.loads(a.get("parts") or "{}")
+        a["partial"] = a["result"] == "success" and any(ok < plan for ok, plan in a["parts"].values())
+        attempts.append(a)
+    comp = [dict(x) for x in c.execute(
+        "SELECT cp.part_id, cp.qty, p.name FROM card_parts cp JOIN parts p ON p.id=cp.part_id "
+        "WHERE cp.card_id=? ORDER BY p.position, p.id", (r["id"],))]
     ok = sum(a["result"] == "success" for a in attempts)
     per = max(1, r["per_plate"] or 1)
-    total = max(1, math.ceil((r["qty"] or 1) / per))
+    # a card with a composition is a single print run; plates only apply to simple cards
+    total = 1 if comp else max(1, math.ceil((r["qty"] or 1) / per))
     return {
         "id": r["id"], "project_id": r["project_id"], "title": r["title"], "lane": r["lane"],
         "qty": r["qty"], "per_plate": per, "url": r["url"], "notes": r["notes"],
@@ -83,7 +92,7 @@ def card_dict(c, r) -> dict:
         "preview_file_id": r["preview_file_id"],
         "analysis": json.loads(r["analysis"]) if r["analysis"] else None,
         "pending_change": r["pending_change"],
-        "files": files, "attempts": attempts,
+        "files": files, "attempts": attempts, "parts": comp,
         "ok": ok,
         "ko": sum(a["result"] == "fail" for a in attempts),
     }
@@ -96,12 +105,67 @@ def project_dict(c, p) -> dict:
         if p["bambu_file_id"] else None
     return {
         "id": p["id"], "name": p["name"], "url": p["url"], "collapsed": bool(p["collapsed"]),
+        "sets": p["sets"] or 1,
+        "parts": inventory(c, p, cards),
         "image": f"/files/{p['image_file_id']}/image" if p["image_file_id"] else None,
         "bambu": file_row(bambu) if bambu else None,
         "bom": json.loads(p["bom"] or "[]"),
         "cards": cards,
         "stats": project_stats(cards),
     }
+
+
+def inventory(c, p, cards: list) -> list:
+    """Per part: needed, produced (successful pieces), in the pipeline (cards not done), still to plan."""
+    sets = p["sets"] or 1
+    produced: dict = {}
+    pipeline: dict = {}
+    for k in cards:
+        for a in k["attempts"]:
+            for pid, (ok, _plan) in a["parts"].items():
+                produced[int(pid)] = produced.get(int(pid), 0) + ok
+        if k["lane"] != "done":
+            for x in k["parts"]:
+                pipeline[x["part_id"]] = pipeline.get(x["part_id"], 0) + x["qty"]
+    out = []
+    for r in c.execute("SELECT * FROM parts WHERE project_id=? ORDER BY position, id", (p["id"],)):
+        need = (r["per_set"] or 0) * sets
+        done, pipe = produced.get(r["id"], 0), pipeline.get(r["id"], 0)
+        out.append({"id": r["id"], "name": r["name"], "per_set": r["per_set"], "need": need,
+                    "produced": done, "pipeline": pipe, "todo": max(0, need - done - pipe)})
+    return out
+
+
+def find_part(c, project_id: int, name: str, create_per_set: Optional[int] = None) -> Optional[int]:
+    """Part matching an object name (by name or alias, case-insensitive); created if asked."""
+    key = part_name(name).lower()
+    for r in c.execute("SELECT id, name, aliases FROM parts WHERE project_id=?", (project_id,)):
+        if r["name"].lower() == key or key in (a.lower() for a in json.loads(r["aliases"] or "[]")):
+            return r["id"]
+    if create_per_set is None:
+        return None
+    pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM parts WHERE project_id=?", (project_id,)).fetchone()[0]
+    return c.execute("INSERT INTO parts (project_id, name, per_set, position) VALUES (?,?,?,?)",
+                     (project_id, part_name(name), create_per_set, pos)).lastrowid
+
+
+def set_composition(c, card_id: int, comp: Dict[int, int]):
+    c.execute("DELETE FROM card_parts WHERE card_id=?", (card_id,))
+    for pid, q in comp.items():
+        if q > 0:
+            c.execute("INSERT INTO card_parts (card_id, part_id, qty) VALUES (?,?,?)", (card_id, int(pid), int(q)))
+
+
+def composition_from_names(c, project_id: int, names: dict, create_per_set: int = 1) -> Dict[int, int]:
+    comp: Dict[int, int] = {}
+    for n, q in names.items():
+        pid = find_part(c, project_id, n, create_per_set)
+        comp[pid] = comp.get(pid, 0) + q
+    return comp
+
+
+def has_parts(c, project_id: int) -> bool:
+    return c.execute("SELECT 1 FROM parts WHERE project_id=? LIMIT 1", (project_id,)).fetchone() is not None
 
 
 def _scale(a: dict, k: int) -> dict:
@@ -149,6 +213,7 @@ class ProjectIn(BaseModel):
     url: Optional[str] = None
     bom: Optional[list] = None
     collapsed: Optional[bool] = None
+    sets: Optional[int] = None
 
 
 @app.post("/api/projects")
@@ -167,6 +232,8 @@ def update_project(pid: int, body: ProjectIn):
         fields["bom"] = json.dumps(fields["bom"])
     if "collapsed" in fields:
         fields["collapsed"] = int(fields["collapsed"])
+    if "sets" in fields:
+        fields["sets"] = max(1, fields["sets"])
     with db.conn() as c:
         if fields:
             sets = ", ".join(f"{k}=?" for k in fields)
@@ -259,6 +326,7 @@ class Move(BaseModel):
     result: Optional[str] = None   # required when entering "done"
     note: Optional[str] = ""
     change: Optional[str] = None   # what changed, when leaving "done" for a retry
+    parts: Optional[Dict[int, int]] = None  # pieces that came out good, per part (entering "done")
 
 
 @app.post("/api/cards/move")
@@ -270,16 +338,111 @@ def move_card(body: Move):
         if body.lane == "done" and card["lane"] != "done":
             if body.result not in ("success", "fail"):
                 raise HTTPException(400, "result")
-            c.execute("INSERT INTO attempts (card_id, result, note, change) VALUES (?,?,?,?)",
-                      (card["id"], body.result, body.note or "", card["pending_change"] or ""))
+            plan = {r["part_id"]: r["qty"] for r in c.execute(
+                "SELECT part_id, qty FROM card_parts WHERE card_id=?", (card["id"],))}
+            given = body.parts or {}
+            res = {}
+            for pid, q in plan.items():
+                ok = given.get(pid, q if body.result == "success" else 0)
+                res[pid] = [max(0, min(q, int(ok))), q]
+            c.execute("INSERT INTO attempts (card_id, result, note, change, parts) VALUES (?,?,?,?,?)",
+                      (card["id"], body.result, body.note or "", card["pending_change"] or "", json.dumps(res)))
             c.execute("UPDATE cards SET pending_change='' WHERE id=?", (card["id"],))
-        if card["lane"] == "done" and body.lane != "done" and body.change is not None:
-            c.execute("UPDATE cards SET pending_change=? WHERE id=?", (body.change, card["id"]))
+        if card["lane"] == "done" and body.lane != "done":
+            if body.change is not None:
+                c.execute("UPDATE cards SET pending_change=? WHERE id=?", (body.change, card["id"]))
+            # Retry after a partial print: only the pieces that are still missing.
+            last = c.execute("SELECT parts FROM attempts WHERE card_id=? ORDER BY id DESC LIMIT 1",
+                             (card["id"],)).fetchone()
+            if last:
+                done = json.loads(last["parts"] or "{}")
+                missing = {int(pid): plan - ok for pid, (ok, plan) in done.items()}
+                if 0 < sum(missing.values()) < sum(plan for _ok, plan in done.values()):
+                    set_composition(c, card["id"], missing)
         c.execute("UPDATE cards SET lane=?, project_id=? WHERE id=?",
                   (body.lane, body.project_id, card["id"]))
         for i, cid in enumerate(body.ids):
             c.execute("UPDATE cards SET position=? WHERE id=?", (i, cid))
         return card_dict(c, get_card(c, card["id"]))
+
+
+class Composition(BaseModel):
+    parts: Dict[int, int]
+
+
+@app.put("/api/cards/{cid}/parts")
+def put_card_parts(cid: int, body: Composition):
+    with db.conn() as c:
+        get_card(c, cid)
+        set_composition(c, cid, body.parts)
+        return card_dict(c, get_card(c, cid))
+
+
+def _copy_file(c, fid: int, card_id: int) -> int:
+    r = c.execute("SELECT * FROM files WHERE id=?", (fid,)).fetchone()
+    stored = uuid.uuid4().hex + os.path.splitext(r["stored"])[1]
+    shutil.copyfile(os.path.join(db.FILES_DIR, r["stored"]), os.path.join(db.FILES_DIR, stored))
+    return c.execute("INSERT INTO files (card_id, name, kind, stored, size) VALUES (?,?,?,?,?)",
+                     (card_id, r["name"], r["kind"], stored, r["size"])).lastrowid
+
+
+@app.post("/api/cards/{cid}/duplicate")
+def duplicate_card(cid: int):
+    """Same print again: new card with the same files, slicing data and composition."""
+    with db.conn() as c:
+        k = get_card(c, cid)
+        lane = "analysed" if k["analysis"] else "park"
+        pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM cards WHERE project_id=? AND lane=?",
+                        (k["project_id"], lane)).fetchone()[0]
+        new = c.execute(
+            "INSERT INTO cards (project_id, title, lane, position, qty, per_plate, url, notes, analysis, plate_index) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (k["project_id"], k["title"], lane, pos, k["qty"], k["per_plate"], k["url"], k["notes"],
+             k["analysis"], k["plate_index"])).lastrowid
+        for f in c.execute("SELECT id FROM files WHERE card_id=?", (cid,)).fetchall():
+            nf = _copy_file(c, f["id"], new)
+            if f["id"] == k["preview_file_id"]:
+                c.execute("UPDATE cards SET preview_file_id=? WHERE id=?", (nf, new))
+        c.execute("INSERT INTO card_parts (card_id, part_id, qty) SELECT ?, part_id, qty FROM card_parts WHERE card_id=?",
+                  (new, cid))
+        return card_dict(c, get_card(c, new))
+
+
+class PartIn(BaseModel):
+    project_id: Optional[int] = None
+    name: Optional[str] = None
+    per_set: Optional[int] = None
+
+
+@app.post("/api/parts")
+def create_part(body: PartIn):
+    with db.conn() as c:
+        pid = find_part(c, body.project_id, body.name or "Pièce", body.per_set if body.per_set is not None else 1)
+        return {"id": pid}
+
+
+@app.patch("/api/parts/{pid}")
+def update_part(pid: int, body: PartIn):
+    with db.conn() as c:
+        r = c.execute("SELECT * FROM parts WHERE id=?", (pid,)).fetchone()
+        if not r:
+            raise HTTPException(404)
+        if body.name and body.name.strip() and body.name.strip() != r["name"]:
+            # keep the old name so object names from Bambu Studio still map here
+            aliases = json.loads(r["aliases"] or "[]")
+            if r["name"] not in aliases:
+                aliases.append(r["name"])
+            c.execute("UPDATE parts SET name=?, aliases=? WHERE id=?", (body.name.strip(), json.dumps(aliases), pid))
+        if body.per_set is not None:
+            c.execute("UPDATE parts SET per_set=? WHERE id=?", (max(0, body.per_set), pid))
+    return {"ok": True}
+
+
+@app.delete("/api/parts/{pid}")
+def delete_part(pid: int):
+    with db.conn() as c:
+        c.execute("DELETE FROM parts WHERE id=?", (pid,))
+    return {"ok": True}
 
 
 @app.delete("/api/attempts/{aid}")
@@ -327,6 +490,11 @@ async def upload(file: UploadFile = File(...), project_id: Optional[int] = Form(
                 tid = store_bytes(info["thumbnail"], "preview.png", card_id=card_id)
                 with db.conn() as c:
                     c.execute("UPDATE cards SET preview_file_id=? WHERE id=?", (tid, card_id))
+            if info["analysis"] and info["analysis"].get("parts"):
+                with db.conn() as c:
+                    if has_parts(c, card["project_id"]):
+                        set_composition(c, card_id, composition_from_names(
+                            c, card["project_id"], info["analysis"]["parts"]))
             if info["analysis"]:
                 with db.conn() as c:
                     c.execute("UPDATE cards SET analysis=? WHERE id=?", (json.dumps(info["analysis"]), card_id))
@@ -339,6 +507,10 @@ async def upload(file: UploadFile = File(...), project_id: Optional[int] = Form(
                                         "WHERE project_id=? AND lane='analysed'", (card["project_id"],)).fetchone()[0]
                         c.execute("UPDATE cards SET lane='analysed', position=? WHERE id=?", (pos, card_id))
         if role == "bambu" and project_id:
+            if info["parts"]:
+                with db.conn() as c:  # the project's objects become its parts (existing ones kept as set)
+                    for n, q in info["parts"].items():
+                        find_part(c, project_id, n, q)
             import_plates(project_id, info["plates"])
         if role == "bambu" and project_id and info["thumbnail"]:
             with db.conn() as c:
@@ -357,10 +529,17 @@ def import_plates(project_id: int, plates: list):
         idx, a = pl["index"], pl["analysis"]
         auto = pl["name"] or f"Plateau {idx}"
         with db.conn() as c:
-            card = c.execute("SELECT * FROM cards WHERE project_id=? AND plate_index=?",
-                             (project_id, idx)).fetchone()
+            same = c.execute("SELECT * FROM cards WHERE project_id=? AND plate_index=? ORDER BY id",
+                             (project_id, idx)).fetchall()
+            comp = composition_from_names(c, project_id, pl["parts"]) if pl.get("parts") else {}
+            for extra in same[1:]:  # duplicates of this plate: refresh slicing data and composition
+                if a:
+                    c.execute("UPDATE cards SET analysis=? WHERE id=?", (json.dumps(a), extra["id"]))
+                if comp and extra["lane"] != "done":
+                    set_composition(c, extra["id"], comp)
+            card = same[0] if same else None
             if card is None:
-                n = max(1, pl["objects"] or 1)
+                n = 1 if comp else max(1, pl["objects"] or 1)
                 lane = "analysed" if a else "park"
                 pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM cards WHERE project_id=? AND lane=?",
                                 (project_id, lane)).fetchone()[0]
@@ -368,6 +547,7 @@ def import_plates(project_id: int, plates: list):
                     "INSERT INTO cards (project_id, title, lane, position, qty, per_plate, plate_index, analysis) "
                     "VALUES (?,?,?,?,?,?,?,?)",
                     (project_id, auto, lane, pos, n, n, idx, json.dumps(a) if a else None)).lastrowid
+                set_composition(c, cid, comp)
                 old_preview = None
             else:
                 cid, old_preview = card["id"], card["preview_file_id"]
@@ -377,6 +557,8 @@ def import_plates(project_id: int, plates: list):
                         c.execute("UPDATE cards SET lane='analysed' WHERE id=?", (cid,))
                 if pl["name"] and card["title"].startswith("Plateau "):
                     c.execute("UPDATE cards SET title=? WHERE id=?", (pl["name"], cid))
+                if comp and card["lane"] != "done":
+                    set_composition(c, cid, comp)
         if pl["thumbnail"]:
             tid = store_bytes(pl["thumbnail"], "preview.png", card_id=cid)
             with db.conn() as c:

@@ -59,7 +59,31 @@ poids qui restent.
 Après une modification dans Bambu Studio, remplace le fichier (⬆) : les cartes existantes sont mises à jour
 (aperçu, temps, grammes) sans doublons, et leur historique est gardé.
 
-### Copies et plateaux
+### Pièces et exemplaires
+
+Pour un projet imprimé plusieurs fois (2 AMS holder, un exemplaire par enfant…), kanbambu compte des **pièces**,
+pas des plateaux :
+
+- Les **colonnes suivent les impressions** : une carte = un plateau lancé, avec sa composition (« 3 Bras + 1 Clip »).
+- Le **projet garde l'inventaire** : pour chaque pièce, produites (vert), dans le pipeline = cartes pas encore en Done
+  (bleu), et `+N` à planifier. L'en-tête montre le total 🧩 produites/à produire.
+- **Exemplaires ×N** (fiche du projet) : multiplie les besoins. Chaque pièce a sa quantité par exemplaire.
+
+D'où viennent les pièces :
+- En ajoutant le `.3mf` du projet, chaque objet devient une pièce (quantité = nombre d'instances dans le projet),
+  et chaque carte de plateau reçoit sa composition.
+- En glissant un `.gcode.3mf` sur un projet qui a des pièces, la composition est lue des noms d'objets du plateau
+  (les objets ignorés à l'impression ne comptent pas). Un objet inconnu crée une pièce.
+- Renommer une pièce garde l'ancien nom comme alias : les noms d'objets de Bambu Studio continuent de correspondre.
+- Sinon, les boutons − / + dans la fiche de la carte.
+
+À l'arrivée dans **Done**, ✓ propose un compteur par pièce : « 2 Bras sur 3 » = réussite partielle (bordure
+pointillée orange). Seules les pièces réussies comptent. Le bouton ↻ renvoie la carte dans Park avec **seulement les
+pièces manquantes**, en demandant ce qui change. ⧉ (fiche de la carte) duplique une impression pour la refaire.
+
+Done garde les 3 cartes les plus récentes par projet ; `+N` affiche les autres.
+
+### Copies et plateaux (cartes simples)
 
 Dans la fiche d'une carte : 📦 nombre de copies à imprimer, ▦ copies par plateau. kanbambu en déduit le nombre
 de plateaux (affiché `fait/total` sur la carte). Quand un `.gcode.3mf` contient plusieurs objets, les copies par
@@ -103,7 +127,7 @@ KANBAMBU_DATA=$(mktemp -d) python -m pytest tests
 
 ```
 app/main.py      API FastAPI + fichiers statiques
-app/db.py        SQLite (projects, cards, files, attempts)
+app/db.py        SQLite (projects, parts, cards, card_parts, files, attempts)
 app/threemf.py   lecture des .3mf / .gcode.3mf Bambu (plateaux, temps, filament, coût, aperçus)
 static/          interface (HTML/CSS/JS sans build, SortableJS, icônes Lucide)
 ```

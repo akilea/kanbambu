@@ -66,8 +66,30 @@ function renderTotals() {
     .join("");
 }
 
+const DONE_SHOWN = 3;            // Done cards visible per project before "+N"
+const openDone = new Set();      // projects whose Done lane is unfolded
+
+/* Pieces of the project: produced (green), in the pipeline (blue), still to plan (grey). */
+function inventoryHtml(p) {
+  if (!p.parts.length) return "";
+  return `<div class="p-inv" data-act="edit-project" title="Pièces : produites · en cours · à planifier">${p.parts.map((x) => {
+    const tot = Math.max(x.need, x.produced + x.pipeline, 1);
+    const w = (n) => `${(100 * Math.min(n, tot)) / tot}%`;
+    return `<div class="part ${x.produced >= x.need && x.need ? "complete" : ""}">
+      <span class="part-name">${esc(x.name)}</span>
+      <span class="bar"><i class="b-ok" style="width:${w(x.produced)}"></i><i class="b-pipe" style="width:${w(x.pipeline)}"></i></span>
+      <span class="part-n">${x.produced}/${x.need}</span>
+      ${x.todo ? `<span class="todo" title="À planifier">+${x.todo}</span>` : ""}
+    </div>`;
+  }).join("")}</div>`;
+}
+
 function projectHtml(p) {
   const by = Object.fromEntries(LANES.map((l) => [l, p.cards.filter((c) => c.lane === l)]));
+  // Done: most recent first, folded after a few
+  by.done.sort((a, b) => (b.attempts.at(-1)?.id || 0) - (a.attempts.at(-1)?.id || 0));
+  const hiddenDone = openDone.has(p.id) ? 0 : Math.max(0, by.done.length - DONE_SHOWN);
+  const need = p.parts.reduce((a, x) => a + x.need, 0), made = p.parts.reduce((a, x) => a + Math.min(x.produced, x.need), 0);
   const ok = p.cards.reduce((a, c) => a + c.ok, 0), ko = p.cards.reduce((a, c) => a + c.ko, 0);
   const bomDone = p.bom.filter((b) => b.done).length;
   const laneIcons = { park: "square-parking", analysed: "scan-search", printing: "printer", done: "flag-triangle-right" };
@@ -78,11 +100,13 @@ function projectHtml(p) {
       ${ic(p.collapsed ? "chevron-right" : "chevron-down")}
       ${p.image ? `<img class="p-img" src="${p.image}" alt="">` : `<span class="p-img"></span>`}
       <span class="p-name">${esc(p.name)}</span>
+      ${p.sets > 1 ? `<span class="sets" title="Exemplaires du projet">×${p.sets}</span>` : ""}
       ${p.url ? `<a class="ib" href="${esc(p.url)}" target="_blank" rel="noopener" title="Lien" onclick="event.stopPropagation()">${ic("link")}</a>` : ""}
       ${p.bambu ? bambuBtn(p.bambu) : ""}
       ${p.bom.length ? `<button class="ib" data-act="edit-project" title="BOM">${ic("list-checks")}${bomDone}/${p.bom.length}</button>` : ""}
       <span class="p-sp"></span>
       ${p.stats && p.stats.left_time_s ? `<span class="p-counts" title="Reste à imprimer">${ic("clock", "sm")} ${fmtTime(p.stats.left_time_s)} ${ic("weight", "sm")} ${fmtG(p.stats.left_g)}</span>` : ""}
+      ${need ? `<span class="p-counts ${made >= need ? "ok" : ""}" title="Pièces produites / à produire">${ic("puzzle", "sm")} ${made}/${need}</span>` : ""}
       <span class="p-counts">
         ${p.collapsed ? LANES.map((l) => (by[l].length ? `<span>${ic(laneIcons[l], "sm")} ${by[l].length}</span>` : "")).join("") : ""}
         ${ok ? `<span class="ok">${ic("circle-check", "sm")} ${ok}</span>` : ""}
@@ -90,41 +114,51 @@ function projectHtml(p) {
       </span>
       <button class="ib" data-act="edit-project" title="Modifier">${ic("pencil")}</button>
     </div>
+    ${inventoryHtml(p)}
     <div class="p-body">
       ${LANES.map((l) => `
         <div class="lane-wrap">
           <div class="lane-tag">${ic(laneIcons[l], "sm")} ${l[0].toUpperCase() + l.slice(1)}</div>
-          <div class="lane" data-lane="${l}" data-project="${p.id}">${by[l].map((c) => cardHtml(c, p)).join("")}</div>
+          <div class="lane" data-lane="${l}" data-project="${p.id}">${by[l].map((c, i) => cardHtml(c, p, l === "done" && i >= by.done.length - hiddenDone)).join("")}</div>
+          ${l === "done" && by.done.length > DONE_SHOWN ? `<button class="add-card" data-act="more-done" title="${hiddenDone ? "Afficher tout" : "Replier"}">${hiddenDone ? `+${hiddenDone}` : ic("chevron-down")}</button>` : ""}
           ${l === "park" ? `<button class="add-card" data-act="add-card" title="Nouvelle impression (ou glisse des fichiers)">${ic("plus")}</button>` : ""}
         </div>`).join("")}
     </div>
   </section>`;
 }
 
-function cardHtml(c, p) {
+function cardHtml(c, p, hidden) {
   const a = c.analysis;
   const last = c.attempts[c.attempts.length - 1];
   const failed = c.lane === "done" && last && last.result === "fail";
+  const partial = c.lane === "done" && last && last.partial;
+  const relaunch = c.parts.length && (failed || partial);
+  const lastRes = last ? last.parts : {};
   const canReprint = c.lane === "done" && last && last.result === "success" && c.plates_left > 0;
   const mult = c.plates_left || c.plates || 1;
   const models = c.files.filter((f) => f.kind !== "image");
   const bambu = [...c.files].reverse().find(isBambu) || (c.plate_index && p && p.bambu);
   return `
-  <div class="card ${failed ? "failed" : ""} ${canReprint ? "partial" : ""}" data-id="${c.id}" data-lane="${c.lane}">
+  <div class="card ${failed ? "failed" : ""} ${canReprint || partial ? "partial" : ""}" data-id="${c.id}" data-lane="${c.lane}" ${hidden ? "hidden" : ""}>
     ${c.preview ? `<img class="thumb" src="${c.preview}" alt="" loading="lazy">` : ""}
     <div class="c-body">
-      <div class="c-title">${esc(c.title)}${c.qty > 1 ? `<span class="qty">×${c.qty}</span>` : ""}</div>
+      <div class="c-title">${esc(c.title)}${c.qty > 1 && !c.parts.length ? `<span class="qty">×${c.qty}</span>` : ""}</div>
+      ${c.parts.length ? `<div class="c-parts">${c.parts.map((x) => {
+        const r = c.lane === "done" && lastRes[x.part_id];
+        return `<span class="pc ${r ? (r[0] >= r[1] ? "ok" : "ko") : ""}">${r ? `${r[0]}/${r[1]}` : x.qty} ${esc(x.name)}</span>`;
+      }).join("")}</div>` : ""}
       <div class="c-meta">
         ${models.length ? `<span title="${esc(models.map((f) => f.name).join("\n"))}">${ic(fileIcon(models[0].kind), "sm")}${models.length > 1 ? models.length : ""}</span>` : ""}
         ${c.url ? `<a class="ib" href="${esc(c.url)}" target="_blank" rel="noopener" title="Lien" onclick="event.stopPropagation()">${ic("link", "sm")}</a>` : ""}
         ${bambu ? bambuBtn(bambu) : ""}
-        ${c.plates > 1 || c.plates_done ? `<span title="Plateaux imprimés / total">${ic("layers", "sm")} ${c.plates_done}/${c.plates}</span>` : ""}
+        ${!c.parts.length && (c.plates > 1 || c.plates_done) ? `<span title="Plateaux imprimés / total">${ic("layers", "sm")} ${c.plates_done}/${c.plates}</span>` : ""}
         ${a && a.time_s ? `<span title="Temps restant">${ic("clock", "sm")} ${fmtTime(a.time_s * mult)}</span>` : ""}
         ${a && a.g ? `<span title="Filament restant">${ic("weight", "sm")} ${fmtG(a.g * mult)}</span>` : ""}
         ${a ? a.filaments.map((f) => `<span class="dot" style="background:${esc(f.color)}" title="${esc(f.type)} ${fmtG(f.g)}"></span>`).join("") : ""}
         ${c.pending_change ? `<span class="retry" title="${esc(c.pending_change)}">${ic("rotate-ccw", "sm")}</span>` : ""}
         ${c.ok ? `<span class="ok">${ic("circle-check", "sm")}${c.ok}</span>` : ""}
         ${c.ko ? `<span class="ko">${ic("circle-x", "sm")}${c.ko}</span>` : ""}
+        ${relaunch ? `<button class="ib reprint" data-relaunch title="Relancer les pièces manquantes">${ic("rotate-ccw", "sm")}</button>` : ""}
         ${canReprint ? `<button class="ib reprint" data-reprint title="Imprimer le plateau suivant">${ic("printer", "sm")}${ic("plus", "sm")}</button>` : ""}
       </div>
     </div>
@@ -169,6 +203,7 @@ function wire() {
       const p = findProject(proj.dataset.id);
       if (act.dataset.act === "edit-project") return projectModal(p);
       if (act.dataset.act === "add-card") return newCardInput(act, p);
+      if (act.dataset.act === "more-done") { openDone.has(p.id) ? openDone.delete(p.id) : openDone.add(p.id); return render(); }
       if (act.dataset.act === "toggle" && !e.target.closest(".p-grip")) {
         p.collapsed = !p.collapsed;
         proj.classList.toggle("collapsed");
@@ -178,6 +213,7 @@ function wire() {
     }
     const card = e.target.closest(".card");
     if (card && e.target.closest("[data-reprint]")) return reprint(findCard(card.dataset.id));
+    if (card && e.target.closest("[data-relaunch]")) return relaunch(findCard(card.dataset.id));
     if (card) cardModal(findCard(card.dataset.id));
   };
 }
@@ -218,13 +254,22 @@ function onCardDrop(e) {
   const ids = [...to.children].map((x) => +x.dataset.id);
   const move = (extra = {}) => api("POST", "/api/cards/move", { card_id: id, project_id, lane, ids, ...extra }).then(load);
   if (lane === card.lane) return move();
-  if (lane === "done") return doneModal(card, (result, note) => move({ result, note }), load);
+  if (lane === "done") return doneModal(card, (result, note, parts) => move({ result, note, parts }), load);
   if (card.lane === "done") {
     const last = card.attempts[card.attempts.length - 1];
     if (last && last.result === "success" && card.plates_left > 0) return move(); // next plate, not a retry
     return retryModal(card, (change) => move({ change }), load);
   }
   return move();
+}
+
+/* Partial or failed print with a composition: back to Park with only the missing pieces. */
+function relaunch(card) {
+  retryModal(card, (change) => {
+    const lane = $(`.lane[data-lane="park"][data-project="${card.project_id}"]`);
+    const ids = [...lane.children].map((x) => +x.dataset.id).concat(card.id);
+    api("POST", "/api/cards/move", { card_id: card.id, project_id: card.project_id, lane: "park", ids, change }).then(load);
+  });
 }
 
 /* Next plate of a partially printed card: straight back to Printing. */
@@ -300,20 +345,43 @@ function doneModal(card, onSave, onCancel) {
       <button class="s" data-r="success" title="Succès">${ic("circle-check", "lg")}</button>
       <button class="f" data-r="fail" title="Échec">${ic("circle-x", "lg")}</button>
     </div>
+    <div class="list" id="got" hidden>${card.parts.map((x) => `
+      <div class="li"><span class="name">${esc(x.name)}</span>${stepper(`got-${x.part_id}`, x.qty, 0, x.qty)}<span class="sub">/ ${x.qty}</span></div>`).join("")}</div>
     <textarea id="note"></textarea>
     <div class="foot"><span></span><button class="btn primary" id="save" disabled>${ic("save")}</button></div>`, onCancel);
   let result = null;
   const note = $("#note", s), save = $("#save", s);
+  wireSteppers(s);
+  const got = () => Object.fromEntries(card.parts.map((x) => [x.part_id, +$(`#got-${x.part_id}`, s).value]));
   const upd = () => { save.disabled = !result || (result === "fail" && !note.value.trim()); };
   s.querySelectorAll(".choice button").forEach((b) => (b.onclick = () => {
     result = b.dataset.r;
     s.querySelectorAll(".choice button").forEach((x) => x.classList.toggle("sel", x === b));
     note.placeholder = result === "success" ? "Amélioration possible ? (optionnel)" : "Pourquoi ?";
+    // pieces that came out good: all of them on success, none on failure; adjustable for a partial print
+    card.parts.forEach((x) => ($(`#got-${x.part_id}`, s).value = result === "success" ? x.qty : 0));
+    $("#got", s).hidden = !card.parts.length || result === "fail";
     note.focus();
     upd();
   }));
   note.oninput = upd;
-  save.onclick = () => { closeModal(true); onSave(result, note.value.trim()); };
+  save.onclick = () => { closeModal(true); onSave(result, note.value.trim(), card.parts.length ? got() : undefined); };
+}
+
+/* Small − n + control. */
+function stepper(id, value, min = 0, max = 999) {
+  return `<span class="stepper"><button class="ib" data-step="-1" data-for="${id}">${ic("minus", "sm")}</button>` +
+    `<input class="num" id="${id}" type="number" min="${min}" max="${max}" value="${value}">` +
+    `<button class="ib" data-step="1" data-for="${id}">${ic("plus", "sm")}</button></span>`;
+}
+function wireSteppers(root, onChange) {
+  root.querySelectorAll("[data-step]").forEach((b) => (b.onclick = () => {
+    const inp = $(`#${b.dataset.for}`, root);
+    const v = Math.min(+inp.max || 999, Math.max(+inp.min || 0, (+inp.value || 0) + +b.dataset.step));
+    inp.value = v;
+    if (onChange) onChange(inp);
+  }));
+  if (onChange) root.querySelectorAll(".stepper input").forEach((i) => (i.onchange = () => onChange(i)));
 }
 
 function retryModal(card, onSave, onCancel) {
@@ -331,12 +399,15 @@ function retryModal(card, onSave, onCancel) {
 
 function cardModal(c) {
   const a = c.analysis;
+  const proj = findProject(c.project_id);
+  const usesParts = proj.parts.length > 0;
+  const qtyOf = (pid) => (c.parts.find((x) => x.part_id === pid) || { qty: 0 }).qty;
   const s = openModal(`
     <div class="row" style="align-items:flex-start">
       <div class="big-img" id="prev" title="Image">${c.preview ? `<img src="${c.preview}" style="width:100%;height:100%;object-fit:contain;border-radius:10px">` : ic("image", "lg")}</div>
       <div class="sec" style="flex:1">
         <div class="row"><input class="title" id="title" value="${esc(c.title)}"></div>
-        <div class="row">
+        <div class="row" ${usesParts ? "hidden" : ""}>
           <span title="Copies à imprimer">${ic("package")}</span><input class="num" id="qty" type="number" min="1" value="${c.qty}">
           <span title="Copies par plateau">${ic("layers")}</span><input class="num" id="per" type="number" min="1" value="${c.per_plate}">
           <span class="sub" title="Plateaux imprimés / total">= ${c.plates_done}/${c.plates} ${ic("layers", "sm")}</span>
@@ -346,6 +417,15 @@ function cardModal(c) {
           ${c.url ? `<a class="ib" href="${esc(c.url)}" target="_blank" rel="noopener">${ic("external-link")}</a>` : ""}</div>
       </div>
     </div>
+
+    ${usesParts ? `
+    <div class="sec">
+      <div class="sec-h">${ic("puzzle", "sm")} Pièces sur ce plateau</div>
+      <div class="list">${proj.parts.map((x) => `
+        <div class="li ${qtyOf(x.id) ? "" : "dim"}"><span class="name">${esc(x.name)}</span>
+          ${x.todo ? `<span class="sub" title="À planifier">+${x.todo}</span>` : ""}
+          ${stepper(`cp-${x.id}`, qtyOf(x.id))}</div>`).join("")}</div>
+    </div>` : ""}
 
     <div class="sec">
       <div class="sec-h">${ic("package", "sm")} Fichiers</div>
@@ -383,9 +463,13 @@ function cardModal(c) {
       <div class="list">
         ${c.attempts.map((t) => `
           <div class="li attempt" style="align-items:flex-start">
-            ${ic(t.result === "success" ? "circle-check" : "circle-x", t.result === "success" ? "ok" : "ko")}
+            ${t.partial ? ic("circle-alert", "retry") : ic(t.result === "success" ? "circle-check" : "circle-x", t.result === "success" ? "ok" : "ko")}
             <div class="name" style="white-space:normal">
               ${t.change ? `<div class="change">${ic("rotate-ccw", "sm")} ${esc(t.change)}</div>` : ""}
+              ${Object.keys(t.parts || {}).length ? `<div class="c-parts">${Object.entries(t.parts).map(([pid, [ok, plan]]) => {
+                const name = (proj.parts.find((x) => x.id === +pid) || { name: "?" }).name;
+                return `<span class="pc ${ok >= plan ? "ok" : "ko"}">${ok}/${plan} ${esc(name)}</span>`;
+              }).join("")}</div>` : ""}
               <div>${t.result === "success" && t.note ? ic("lightbulb", "sm") + " " : ""}${esc(t.note) || ""}</div>
             </div>
             <span class="sub">${fmtDate(t.created_at)}</span>
@@ -397,6 +481,8 @@ function cardModal(c) {
 
     <div class="foot">
       <button class="btn danger" id="del" title="Supprimer la carte">${ic("trash-2")}</button>
+      <span class="p-sp"></span>
+      <button class="btn" id="dup" title="Imprimer encore (dupliquer)">${ic("copy")}</button>
       <button class="btn primary" id="close" title="Fermer">${ic("circle-check")}</button>
     </div>`, load);
 
@@ -406,6 +492,12 @@ function cardModal(c) {
   $("#qty", s).onchange = (e) => patch({ qty: Math.max(1, +e.target.value || 1) }).then(refreshCard);
   $("#per", s).onchange = (e) => patch({ per_plate: Math.max(1, +e.target.value || 1) }).then(refreshCard);
   if ($("#reprint", s)) $("#reprint", s).onclick = () => { closeModal(true); reprint(c); };
+  $("#dup", s).onclick = async () => { const n = await api("POST", `/api/cards/${c.id}/duplicate`); BOARD = await api("GET", "/api/board"); cardModal(findCard(n.id)); };
+  if (usesParts) wireSteppers(s, async () => {
+    const parts = Object.fromEntries(proj.parts.map((x) => [x.id, +$(`#cp-${x.id}`, s).value || 0]));
+    await api("PUT", `/api/cards/${c.id}/parts`, { parts });
+    refreshCard();
+  });
   $("#url", s).onchange = (e) => patch({ url: e.target.value.trim() });
   $("#notes", s).onchange = (e) => patch({ notes: e.target.value });
   $("#close", s).onclick = () => closeModal();
@@ -468,6 +560,18 @@ function projectModal(p) {
         </div>
       </div>
     </div>
+    <div class="sec">
+      <div class="sec-h">${ic("puzzle", "sm")} Pièces
+        <span class="row" style="margin-left:auto;text-transform:none" title="Exemplaires du projet">${ic("copy", "sm")} ×${stepper("sets", p.sets, 1)}</span></div>
+      <div class="list">${p.parts.map((x) => `
+        <div class="li">
+          <input class="name" data-part-name="${x.id}" value="${esc(x.name)}">
+          <span title="Par exemplaire">${stepper(`per-${x.id}`, x.per_set)}</span>
+          <span class="sub num-r" title="Produites / à produire">${x.produced}/${x.need}${x.todo ? ` · +${x.todo}` : ""}</span>
+          <button class="ib" data-del-part="${x.id}" title="Supprimer">${ic("x", "sm")}</button>
+        </div>`).join("")}</div>
+      <button class="add-card" id="addPart" title="Ajouter une pièce">${ic("plus")}</button>
+    </div>
     ${p.stats ? statsHtml(p.stats) : ""}
     <div class="sec">
       <div class="sec-h">${ic("list-checks", "sm")} BOM</div>
@@ -480,6 +584,22 @@ function projectModal(p) {
     </div>`, load);
 
   const patch = (body) => api("PATCH", `/api/projects/${p.id}`, body);
+  const reopen = async () => { BOARD = await api("GET", "/api/board"); projectModal(findProject(p.id)); };
+  wireSteppers(s, async (inp) => {
+    if (inp.id === "sets") await patch({ sets: Math.max(1, +inp.value || 1) });
+    else if (inp.id.startsWith("per-")) await api("PATCH", `/api/parts/${inp.id.slice(4)}`, { per_set: Math.max(0, +inp.value || 0) });
+    else return;
+    reopen();
+  });
+  s.querySelectorAll("[data-part-name]").forEach((i) => (i.onchange = () =>
+    api("PATCH", `/api/parts/${i.dataset.partName}`, { name: i.value.trim() }).then(reopen)));
+  s.querySelectorAll("[data-del-part]").forEach((b) => armDelete(b, async () => { await api("DELETE", `/api/parts/${b.dataset.delPart}`); reopen(); }));
+  $("#addPart", s).onclick = async () => {
+    await api("POST", "/api/parts", { project_id: p.id, name: `Pièce ${p.parts.length + 1}`, per_set: 1 });
+    await reopen();
+    const last = [...$("#modal").querySelectorAll("[data-part-name]")].pop();
+    if (last) last.select();
+  };
   const bom = p.bom.map((b) => ({ ...b }));
   const saveBom = () => patch({ bom: bom.filter((b) => b.name.trim()) });
   const drawBom = () => {

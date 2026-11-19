@@ -188,7 +188,8 @@ def test_project_plates(tmp_path):
     pr = next(p for p in c.get("/api/board").json()["projects"] if p["id"] == proj["id"])
     cards = {k["plate_index"]: k for k in pr["cards"]}
     assert cards[1]["title"] == "Cadre" and cards[1]["lane"] == "analysed" and cards[1]["preview"]
-    assert cards[2]["title"] == "Plateau 2" and (cards[2]["qty"], cards[2]["plates"]) == (2, 1)
+    assert cards[2]["title"] == "Plateau 2" and cards[2]["plates"] == 1
+    assert {x["name"]: x["qty"] for x in cards[2]["parts"]} == {"a": 1, "b": 1}
     assert cards[3]["lane"] == "park"
     st = pr["stats"]
     assert st["time_s"] == 19200 + 6780 and st["g"] == 420 and st["cost"] == 9.0
@@ -202,3 +203,100 @@ def test_project_plates(tmp_path):
     assert len(pr["cards"]) == 3
     assert pr["stats"]["left_time_s"] == 6780
     c.delete(f"/api/projects/{proj['id']}")
+
+
+AMS_SETTINGS = """<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <object id="2"><metadata key="name" value="Base.stl"/></object>
+  <object id="3"><metadata key="name" value="Bras"/></object>
+  <object id="4"><metadata key="name" value="Clip"/></object>
+  <plate><metadata key="plater_id" value="1"/><metadata key="plater_name" value="Base"/>
+    <model_instance><metadata key="object_id" value="2"/><metadata key="instance_id" value="0"/></model_instance></plate>
+  <plate><metadata key="plater_id" value="2"/><metadata key="plater_name" value=""/>
+    <model_instance><metadata key="object_id" value="3"/><metadata key="instance_id" value="0"/></model_instance>
+    <model_instance><metadata key="object_id" value="3"/><metadata key="instance_id" value="1"/></model_instance>
+    <model_instance><metadata key="object_id" value="4"/><metadata key="instance_id" value="0"/></model_instance></plate>
+</config>"""
+
+AMS_SLICE = """<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <plate><metadata key="index" value="1"/><metadata key="prediction" value="3600"/><metadata key="weight" value="50"/>
+    <object identify_id="1" name="Base.stl" skipped="false"/>
+    <filament id="1" type="PLA" color="#000000" used_m="16" used_g="50"/></plate>
+</config>"""
+
+MIXED_SLICE = """<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <plate><metadata key="index" value="1"/><metadata key="prediction" value="7200"/><metadata key="weight" value="80"/>
+    <object identify_id="1" name="Bras" skipped="false"/>
+    <object identify_id="2" name="Bras" skipped="false"/>
+    <object identify_id="3" name="Bras" skipped="false"/>
+    <object identify_id="4" name="Base" skipped="false"/>
+    <object identify_id="5" name="Clip" skipped="true"/>
+    <filament id="1" type="PLA" color="#000000" used_m="26" used_g="80"/></plate>
+</config>"""
+
+
+def _zip(**files) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("3D/3dmodel.model", "<model/>")
+        z.writestr("Metadata/plate_1.png", png())
+        for k, v in files.items():
+            z.writestr(f"Metadata/{k}.config", v)
+    return buf.getvalue()
+
+
+def test_parts_inventory():
+    c = TestClient(app)
+    proj = c.post("/api/projects", json={"name": "AMS holder"}).json()
+    pid = proj["id"]
+    get = lambda: next(p for p in c.get("/api/board").json()["projects"] if p["id"] == pid)  # noqa: E731
+    inv = lambda: {x["name"]: (x["need"], x["produced"], x["pipeline"], x["todo"]) for x in get()["parts"]}  # noqa: E731
+
+    c.post("/api/upload", data={"project_id": pid, "role": "bambu"},
+           files={"file": ("ams.3mf", _zip(model_settings=AMS_SETTINGS, slice_info=AMS_SLICE))})
+    c.patch(f"/api/projects/{pid}", json={"sets": 2})
+    # one copy of the project = 1 Base, 2 Bras, 1 Clip; two copies wanted
+    assert inv() == {"Base": (2, 0, 1, 1), "Bras": (4, 0, 2, 2), "Clip": (2, 0, 1, 1)}
+    cards = {k["plate_index"]: k for k in get()["cards"]}
+    assert {x["name"]: x["qty"] for x in cards[2]["parts"]} == {"Bras": 2, "Clip": 1}
+    assert cards[1]["lane"] == "analysed" and cards[2]["lane"] == "park"
+
+    # second copy of plate 1
+    dup = c.post(f"/api/cards/{cards[1]['id']}/duplicate").json()
+    assert dup["lane"] == "analysed" and dup["parts"][0]["qty"] == 1
+    assert inv()["Base"] == (2, 0, 2, 0)
+
+    # a mixed plate sliced by hand: 3 Bras + 1 Base (Clip skipped)
+    mixed = c.post("/api/cards", json={"project_id": pid, "title": "Mix"}).json()
+    c.post("/api/upload", data={"card_id": mixed["id"], "role": "attach"},
+           files={"file": ("mix.gcode.3mf", _zip(slice_info=MIXED_SLICE))})
+    m = next(k for k in get()["cards"] if k["id"] == mixed["id"])
+    comp = {x["name"]: x["qty"] for x in m["parts"]}
+    assert comp == {"Bras": 3, "Base": 1} and m["lane"] == "analysed"
+    ids = {x["name"]: x["part_id"] for x in m["parts"]}
+
+    mv = lambda card, lane, **kw: c.post("/api/cards/move", json={  # noqa: E731
+        "card_id": card, "project_id": pid, "lane": lane, "ids": [card], **kw}).json()
+    # partial: 2 of 3 Bras came out fine
+    mv(m["id"], "printing")
+    out = mv(m["id"], "done", result="success", parts={ids["Bras"]: 2})
+    assert out["attempts"][-1]["partial"]
+    assert inv()["Bras"] == (4, 2, 2, 0) and inv()["Base"] == (2, 1, 2, 0)
+    # retry only what is missing
+    out = mv(m["id"], "park", change="Brim")
+    assert {x["name"]: x["qty"] for x in out["parts"]} == {"Bras": 1}
+    assert inv()["Bras"] == (4, 2, 3, 0)
+    # a failed print produces nothing
+    mv(m["id"], "printing")
+    out = mv(m["id"], "done", result="fail", note="Spaghetti")
+    assert inv()["Bras"] == (4, 2, 2, 0)
+
+    # renaming a part keeps the old object name as an alias
+    c.patch(f"/api/parts/{ids['Bras']}", json={"name": "Bras AMS"})
+    k = c.post("/api/cards", json={"project_id": pid, "title": "x"}).json()
+    c.post("/api/upload", data={"card_id": k["id"], "role": "attach"},
+           files={"file": ("x.gcode.3mf", _zip(slice_info=MIXED_SLICE))})
+    assert {x["name"] for x in next(q for q in get()["cards"] if q["id"] == k["id"])["parts"]} == {"Bras AMS", "Base"}
+    c.delete(f"/api/projects/{pid}")
