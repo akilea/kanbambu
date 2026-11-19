@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS cards (
     position INTEGER DEFAULT 0,
     qty INTEGER DEFAULT 1,          -- copies wanted
     per_plate INTEGER DEFAULT 1,    -- copies per plate
+    plate_index INTEGER,            -- plate number in the project's Bambu file, when imported from it
     url TEXT DEFAULT '',
     notes TEXT DEFAULT '',
     preview_file_id INTEGER,
@@ -62,8 +63,10 @@ def init():
     with conn() as c:
         c.executescript(SCHEMA)
         cols = {r["name"] for r in c.execute("PRAGMA table_info(cards)")}
-        if "per_plate" not in cols:  # migration for databases created before plates existed
+        if "per_plate" not in cols:  # migrations for older databases
             c.execute("ALTER TABLE cards ADD COLUMN per_plate INTEGER DEFAULT 1")
+        if "plate_index" not in cols:
+            c.execute("ALTER TABLE cards ADD COLUMN plate_index INTEGER")
 
 
 @contextmanager

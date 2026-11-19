@@ -55,6 +55,43 @@ def make_3mf(sliced=True) -> bytes:
     return buf.getvalue()
 
 
+MODEL_SETTINGS = """<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <plate><metadata key="plater_id" value="1"/><metadata key="plater_name" value="Cadre"/>
+    <model_instance><metadata key="object_id" value="2"/></model_instance></plate>
+  <plate><metadata key="plater_id" value="2"/><metadata key="plater_name" value=""/>
+    <model_instance><metadata key="object_id" value="3"/></model_instance>
+    <model_instance><metadata key="object_id" value="4"/></model_instance></plate>
+  <plate><metadata key="plater_id" value="3"/><metadata key="plater_name" value="Roues"/>
+    <model_instance><metadata key="object_id" value="5"/></model_instance></plate>
+</config>"""
+
+PROJECT_SLICE = """<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <plate><metadata key="index" value="1"/><metadata key="prediction" value="19200"/><metadata key="weight" value="300"/>
+    <object identify_id="1" name="cadre" skipped="false"/>
+    <filament id="1" type="PLA" color="#808080" used_m="100" used_g="300"/></plate>
+  <plate><metadata key="index" value="2"/><metadata key="prediction" value="6780"/><metadata key="weight" value="120"/>
+    <object identify_id="2" name="a" skipped="false"/><object identify_id="3" name="b" skipped="false"/>
+    <filament id="1" type="PLA" color="#808080" used_m="20" used_g="60"/>
+    <filament id="3" type="PETG" color="#5A7A9A" used_m="20" used_g="60"/></plate>
+</config>"""
+
+
+def make_project() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("3D/3dmodel.model", "<model/>")
+        for i in (1, 2, 3):
+            z.writestr(f"Metadata/plate_{i}.png", png(4, 4, (i * 60, 90, 120)))
+        z.writestr("Metadata/model_settings.config", MODEL_SETTINGS)
+        z.writestr("Metadata/slice_info.config", PROJECT_SLICE)
+        z.writestr("Metadata/project_settings.config", json.dumps({
+            "filament_settings_id": ["Bambu PLA Basic", "x", "Bambu PETG HF"],
+            "filament_cost": ["20", "0", "30"]}))
+    return buf.getvalue()
+
+
 def test_parse(tmp_path):
     p = tmp_path / "a.gcode.3mf"
     p.write_bytes(make_3mf())
@@ -133,3 +170,35 @@ def test_flow():
 
     assert c.delete(f"/api/projects/{p['id']}").json()["ok"]
     assert c.get("/api/board").json()["projects"] == []
+
+
+def test_project_plates(tmp_path):
+    f = tmp_path / "robot.3mf"
+    f.write_bytes(make_project())
+    info = parse_3mf(str(f))
+    assert [p["index"] for p in info["plates"]] == [1, 2, 3]
+    p1, p2, p3 = info["plates"]
+    assert p1["name"] == "Cadre" and p1["analysis"]["time_s"] == 19200 and p1["thumbnail"]
+    assert p2["objects"] == 2 and p2["analysis"]["cost"] == 3.0   # 60 g @ 20 + 60 g @ 30
+    assert p3["analysis"] is None and p3["objects"] == 1          # not sliced yet
+
+    c = TestClient(app)
+    proj = c.post("/api/projects", json={"name": "Robot"}).json()
+    c.post("/api/upload", data={"project_id": proj["id"], "role": "bambu"}, files={"file": ("robot.3mf", make_project())})
+    pr = next(p for p in c.get("/api/board").json()["projects"] if p["id"] == proj["id"])
+    cards = {k["plate_index"]: k for k in pr["cards"]}
+    assert cards[1]["title"] == "Cadre" and cards[1]["lane"] == "analysed" and cards[1]["preview"]
+    assert cards[2]["title"] == "Plateau 2" and (cards[2]["qty"], cards[2]["plates"]) == (2, 1)
+    assert cards[3]["lane"] == "park"
+    st = pr["stats"]
+    assert st["time_s"] == 19200 + 6780 and st["g"] == 420 and st["cost"] == 9.0
+    assert {f["profile"]: f["g"] for f in st["filaments"]} == {"Bambu PLA Basic": 360, "Bambu PETG HF": 60}
+
+    # print plate 1, then re-import: same cards, nothing duplicated
+    c.post("/api/cards/move", json={"card_id": cards[1]["id"], "project_id": proj["id"], "lane": "done",
+                                    "ids": [cards[1]["id"]], "result": "success"})
+    c.post("/api/upload", data={"project_id": proj["id"], "role": "bambu"}, files={"file": ("robot.3mf", make_project())})
+    pr = next(p for p in c.get("/api/board").json()["projects"] if p["id"] == proj["id"])
+    assert len(pr["cards"]) == 3
+    assert pr["stats"]["left_time_s"] == 6780
+    c.delete(f"/api/projects/{proj['id']}")

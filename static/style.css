@@ -138,3 +138,10 @@ input.num { width: 58px; text-align: center; }
   .modal { padding: 0; align-items: stretch; }
   .sheet { border-radius: 0; min-height: 100%; }
 }
+
+/* project stats */
+.stats-box { background: var(--bg); border-radius: 10px; padding: 10px; }
+.stats-box .li { padding: 3px 4px; }
+.stats-box .li.total { border-top: 1px solid var(--line); font-weight: 600; margin-top: 2px; }
+.num-r { min-width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+.li.click { cursor: pointer; }

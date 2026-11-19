@@ -17,9 +17,11 @@ const api = async (method, url, body) => {
 
 const fmtTime = (s) => {
   if (!s) return "";
-  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.round((s % 3600) / 60);
+  if (d) return `${d}j${h}h${String(m).padStart(2, "0")}`;
   return h ? `${h}h${String(m).padStart(2, "0")}` : `${m}m`;
 };
+const fmtCost = (c) => (c ? `${c.toFixed(2)} $` : "");
 const fmtG = (g) => (g >= 1000 ? `${(g / 1000).toFixed(2)}kg` : `${Math.round(g)}g`);
 const fmtDate = (d) => (d ? new Date(d.replace(" ", "T") + "Z").toLocaleDateString("fr-CA", { month: "short", day: "numeric" }) : "");
 const fileIcon = (k) => ({ stl: "box", "3mf": "file-box", gcode3mf: "file-box", step: "box", image: "image" }[k] || "package");
@@ -80,6 +82,7 @@ function projectHtml(p) {
       ${p.bambu ? bambuBtn(p.bambu) : ""}
       ${p.bom.length ? `<button class="ib" data-act="edit-project" title="BOM">${ic("list-checks")}${bomDone}/${p.bom.length}</button>` : ""}
       <span class="p-sp"></span>
+      ${p.stats && p.stats.left_time_s ? `<span class="p-counts" title="Reste à imprimer">${ic("clock", "sm")} ${fmtTime(p.stats.left_time_s)} ${ic("weight", "sm")} ${fmtG(p.stats.left_g)}</span>` : ""}
       <span class="p-counts">
         ${p.collapsed ? LANES.map((l) => (by[l].length ? `<span>${ic(laneIcons[l], "sm")} ${by[l].length}</span>` : "")).join("") : ""}
         ${ok ? `<span class="ok">${ic("circle-check", "sm")} ${ok}</span>` : ""}
@@ -91,21 +94,21 @@ function projectHtml(p) {
       ${LANES.map((l) => `
         <div class="lane-wrap">
           <div class="lane-tag">${ic(laneIcons[l], "sm")} ${l[0].toUpperCase() + l.slice(1)}</div>
-          <div class="lane" data-lane="${l}" data-project="${p.id}">${by[l].map(cardHtml).join("")}</div>
+          <div class="lane" data-lane="${l}" data-project="${p.id}">${by[l].map((c) => cardHtml(c, p)).join("")}</div>
           ${l === "park" ? `<button class="add-card" data-act="add-card" title="Nouvelle impression (ou glisse des fichiers)">${ic("plus")}</button>` : ""}
         </div>`).join("")}
     </div>
   </section>`;
 }
 
-function cardHtml(c) {
+function cardHtml(c, p) {
   const a = c.analysis;
   const last = c.attempts[c.attempts.length - 1];
   const failed = c.lane === "done" && last && last.result === "fail";
   const canReprint = c.lane === "done" && last && last.result === "success" && c.plates_left > 0;
   const mult = c.plates_left || c.plates || 1;
   const models = c.files.filter((f) => f.kind !== "image");
-  const bambu = [...c.files].reverse().find(isBambu);
+  const bambu = [...c.files].reverse().find(isBambu) || (c.plate_index && p && p.bambu);
   return `
   <div class="card ${failed ? "failed" : ""} ${canReprint ? "partial" : ""}" data-id="${c.id}" data-lane="${c.lane}">
     ${c.preview ? `<img class="thumb" src="${c.preview}" alt="" loading="lazy">` : ""}
@@ -346,7 +349,9 @@ function cardModal(c) {
 
     <div class="sec">
       <div class="sec-h">${ic("package", "sm")} Fichiers</div>
-      <div class="list">${c.files.map((f) => `
+      <div class="list">${c.plate_index && findProject(c.project_id)?.bambu ? (() => { const f = findProject(c.project_id).bambu; return `
+        <div class="li">${ic("file-box")}<span class="name" title="${esc(f.name)}">${esc(f.name)}</span>
+          <span class="sub">${ic("layers", "sm")} ${c.plate_index}</span>${bambuBtn(f)}</div>`; })() : ""}${c.files.map((f) => `
         <div class="li">${ic(fileIcon(f.kind))}<span class="name" title="${esc(f.name)}">${esc(f.name)}</span>
           ${isBambu(f) ? bambuBtn(f) : ""}
           <a class="ib" href="${f.url}?dl=1" title="Télécharger">${ic("download")}</a>
@@ -418,6 +423,35 @@ function cardModal(c) {
   s.querySelectorAll("[data-del-att]").forEach((b) => armDelete(b, async () => { await api("DELETE", `/api/attempts/${b.dataset.delAtt}`); refresh(); }));
 }
 
+/* Bambu Studio style totals: filaments, then time per plate. */
+function statsHtml(st) {
+  const laneIcon = { park: "square-parking", analysed: "scan-search", printing: "printer", done: "flag-triangle-right" };
+  const m = st.filaments.reduce((a, f) => a + f.m, 0);
+  return `
+    <div class="sec stats-box">
+      <div class="sec-h">${ic("weight", "sm")} Filament</div>
+      <div class="list">${st.filaments.map((f) => `
+        <div class="li"><span class="dot" style="background:${esc(f.color)}"></span>
+          <span class="name">${f.id ? `<span class="sub">${f.id}</span> ` : ""}${esc(f.profile || f.type)}</span>
+          <span class="sub">${f.m.toFixed(1)} m</span><span class="num-r">${f.g.toFixed(1)} g</span>
+          ${st.cost ? `<span class="sub num-r">${fmtCost(f.cost)}</span>` : ""}</div>`).join("")}
+        <div class="li total"><span class="name">Total</span><span class="sub">${m.toFixed(1)} m</span>
+          <span class="num-r">${st.g.toFixed(1)} g</span>${st.cost ? `<span class="num-r">${fmtCost(st.cost)}</span>` : ""}</div>
+      </div>
+      <div class="sec-h">${ic("clock", "sm")} Temps</div>
+      <div class="list">${st.rows.map((r) => `
+        <div class="li click" data-open-card="${r.card_id}">
+          ${r.plates_done >= r.plates ? ic("circle-check", "sm ok") : ic(laneIcon[r.lane], "sm")}
+          <span class="name">${esc(r.title)}</span>
+          ${r.plates > 1 ? `<span class="sub">${ic("layers", "sm")} ${r.plates_done}/${r.plates}</span>` : ""}
+          <span class="num-r">${r.time_s == null ? `<span class="sub" title="Pas encore tranché">—</span>` : fmtTime(r.time_s)}</span></div>`).join("")}
+        <div class="li total"><span class="name">Total</span><span class="num-r">${fmtTime(st.time_s)}</span></div>
+        ${st.left_time_s !== st.time_s ? `<div class="li total"><span class="name">Reste</span>
+          <span class="sub">${fmtG(st.left_g)}</span><span class="num-r">${fmtTime(st.left_time_s)}</span></div>` : ""}
+      </div>
+    </div>`;
+}
+
 function projectModal(p) {
   const s = openModal(`
     <div class="row" style="align-items:flex-start">
@@ -428,11 +462,13 @@ function projectModal(p) {
         <div class="row">${ic("file-box")}
           ${p.bambu ? `<span class="name" style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(p.bambu.name)}</span>
             ${bambuBtn(p.bambu)}<a class="ib" href="${p.bambu.url}?dl=1" title="Télécharger">${ic("download")}</a>
+            <button class="ib" id="reBambu" title="Remplacer / relire les plateaux">${ic("upload")}</button>
             <button class="ib" id="rmBambu" title="Retirer">${ic("trash-2")}</button>`
           : `<div class="drop-zone" id="bz" style="flex:1;padding:6px" title="Projet Bambu Studio (.3mf)">${ic("upload")} .3mf</div>`}
         </div>
       </div>
     </div>
+    ${p.stats ? statsHtml(p.stats) : ""}
     <div class="sec">
       <div class="sec-h">${ic("list-checks", "sm")} BOM</div>
       <div class="list" id="bom"></div>
@@ -472,6 +508,8 @@ function projectModal(p) {
   const refresh = async () => { BOARD = await api("GET", "/api/board"); projectModal(findProject(p.id)); };
   dropZone($("#pimg", s), async (files) => { if (files[0]) { await uploadFile(files[0], { project_id: p.id, role: "image" }); refresh(); } });
   if ($("#bz", s)) dropZone($("#bz", s), async (files) => { if (files[0]) { await uploadFile(files[0], { project_id: p.id, role: "bambu" }); refresh(); } });
+  if ($("#reBambu", s)) dropZone($("#reBambu", s), async (files) => { if (files[0]) { await uploadFile(files[0], { project_id: p.id, role: "bambu" }); refresh(); } });
+  s.querySelectorAll("[data-open-card]").forEach((r) => (r.onclick = () => cardModal(findCard(r.dataset.openCard))));
   if ($("#rmBambu", s)) armDelete($("#rmBambu", s), async () => { await api("DELETE", `/api/files/${p.bambu.id}`); refresh(); });
 }
 

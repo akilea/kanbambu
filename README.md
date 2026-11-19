@@ -45,6 +45,20 @@ Un `.3mf` de projet normal ne contient pas les grammes. Il donne seulement la mi
 
 L'en-tête affiche le total de filament par couleur pour tout ce qui est en Analysed et Printing (plateaux restants).
 
+### Projet Bambu : une carte par plateau
+
+Dans la fiche du projet (✏️), ajoute le `.3mf` du projet Bambu Studio. kanbambu lit tous ses plateaux et crée
+une carte par plateau, avec le nom du plateau et l'aperçu de Bambu Studio. Les plateaux déjà tranchés passent
+en Analysed avec leur temps et leurs grammes. Pour avoir les stats de tous les plateaux, fais **Trancher tout**
+puis enregistre le projet avant de l'ajouter.
+
+La fiche du projet montre alors les totaux, comme le panneau « All Plates Stats » de Bambu Studio : filament
+par emplacement (m, g, coût), temps par plateau, total et reste. L'en-tête du projet affiche le temps et le
+poids qui restent.
+
+Après une modification dans Bambu Studio, remplace le fichier (⬆) : les cartes existantes sont mises à jour
+(aperçu, temps, grammes) sans doublons, et leur historique est gardé.
+
 ### Copies et plateaux
 
 Dans la fiche d'une carte : 📦 nombre de copies à imprimer, ▦ copies par plateau. kanbambu en déduit le nombre
@@ -90,6 +104,6 @@ KANBAMBU_DATA=$(mktemp -d) python -m pytest tests
 ```
 app/main.py      API FastAPI + fichiers statiques
 app/db.py        SQLite (projects, cards, files, attempts)
-app/threemf.py   lecture des .3mf / .gcode.3mf Bambu
+app/threemf.py   lecture des .3mf / .gcode.3mf Bambu (plateaux, temps, filament, coût, aperçus)
 static/          interface (HTML/CSS/JS sans build, SortableJS, icônes Lucide)
 ```

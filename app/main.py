@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import db
-from .threemf import parse_3mf
+from .threemf import merge, parse_3mf
 
 LANES = ("park", "analysed", "printing", "done")
 STATIC = os.path.join(os.path.dirname(__file__), "..", "static")
@@ -78,6 +78,7 @@ def card_dict(c, r) -> dict:
         "id": r["id"], "project_id": r["project_id"], "title": r["title"], "lane": r["lane"],
         "qty": r["qty"], "per_plate": per, "url": r["url"], "notes": r["notes"],
         "plates": total, "plates_done": min(ok, total), "plates_left": max(0, total - ok),
+        "plate_index": r["plate_index"],
         "preview": f"/files/{r['preview_file_id']}/preview" if r["preview_file_id"] else None,
         "preview_file_id": r["preview_file_id"],
         "analysis": json.loads(r["analysis"]) if r["analysis"] else None,
@@ -99,6 +100,36 @@ def project_dict(c, p) -> dict:
         "bambu": file_row(bambu) if bambu else None,
         "bom": json.loads(p["bom"] or "[]"),
         "cards": cards,
+        "stats": project_stats(cards),
+    }
+
+
+def _scale(a: dict, k: int) -> dict:
+    """Analysis of one plate run k times."""
+    return {**a, "time_s": a["time_s"] * k, "g": a["g"] * k, "cost": a.get("cost", 0) * k,
+            "filaments": [{**f, "g": f["g"] * k, "m": f["m"] * k, "cost": f.get("cost", 0) * k}
+                          for f in a["filaments"]]}
+
+
+def project_stats(cards: list) -> Optional[dict]:
+    """Bambu Studio style totals for the whole project, counting every plate to print."""
+    rows = [c for c in cards if c["analysis"]]
+    if not rows:
+        return None
+    total = merge([_scale(c["analysis"], c["plates"]) for c in rows])
+    left = [c for c in rows if c["plates_left"]]
+    left_m = merge([_scale(c["analysis"], c["plates_left"]) for c in left]) if left else None
+    return {
+        "filaments": total["filaments"],
+        "time_s": total["time_s"], "g": total["g"], "cost": total["cost"],
+        "left_time_s": left_m["time_s"] if left_m else 0,
+        "left_g": left_m["g"] if left_m else 0,
+        # every analysed card, plus imported plates not sliced yet (time unknown)
+        "rows": [{"card_id": c["id"], "title": c["title"], "lane": c["lane"], "plate_index": c["plate_index"],
+                  "time_s": c["analysis"]["time_s"] * c["plates"] if c["analysis"] else None,
+                  "plates": c["plates"], "plates_done": c["plates_done"]}
+                 for c in sorted((c for c in cards if c["analysis"] or c["plate_index"]),
+                                 key=lambda c: (c["plate_index"] is None, c["plate_index"] or 0, c["id"]))],
     }
 
 
@@ -307,6 +338,8 @@ async def upload(file: UploadFile = File(...), project_id: Optional[int] = Form(
                         pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM cards "
                                         "WHERE project_id=? AND lane='analysed'", (card["project_id"],)).fetchone()[0]
                         c.execute("UPDATE cards SET lane='analysed', position=? WHERE id=?", (pos, card_id))
+        if role == "bambu" and project_id:
+            import_plates(project_id, info["plates"])
         if role == "bambu" and project_id and info["thumbnail"]:
             with db.conn() as c:
                 has = c.execute("SELECT image_file_id FROM projects WHERE id=?", (project_id,)).fetchone()[0]
@@ -316,6 +349,40 @@ async def upload(file: UploadFile = File(...), project_id: Optional[int] = Form(
                     c.execute("UPDATE projects SET image_file_id=? WHERE id=?", (tid, project_id))
     with db.conn() as c:
         return file_row(c.execute("SELECT * FROM files WHERE id=?", (fid,)).fetchone())
+
+
+def import_plates(project_id: int, plates: list):
+    """One card per plate of the project's Bambu file. Re-importing updates the same cards."""
+    for pl in plates:
+        idx, a = pl["index"], pl["analysis"]
+        auto = pl["name"] or f"Plateau {idx}"
+        with db.conn() as c:
+            card = c.execute("SELECT * FROM cards WHERE project_id=? AND plate_index=?",
+                             (project_id, idx)).fetchone()
+            if card is None:
+                n = max(1, pl["objects"] or 1)
+                lane = "analysed" if a else "park"
+                pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM cards WHERE project_id=? AND lane=?",
+                                (project_id, lane)).fetchone()[0]
+                cid = c.execute(
+                    "INSERT INTO cards (project_id, title, lane, position, qty, per_plate, plate_index, analysis) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (project_id, auto, lane, pos, n, n, idx, json.dumps(a) if a else None)).lastrowid
+                old_preview = None
+            else:
+                cid, old_preview = card["id"], card["preview_file_id"]
+                if a:
+                    c.execute("UPDATE cards SET analysis=? WHERE id=?", (json.dumps(a), cid))
+                    if card["lane"] == "park":
+                        c.execute("UPDATE cards SET lane='analysed' WHERE id=?", (cid,))
+                if pl["name"] and card["title"].startswith("Plateau "):
+                    c.execute("UPDATE cards SET title=? WHERE id=?", (pl["name"], cid))
+        if pl["thumbnail"]:
+            tid = store_bytes(pl["thumbnail"], "preview.png", card_id=cid)
+            with db.conn() as c:
+                c.execute("UPDATE cards SET preview_file_id=? WHERE id=?", (tid, cid))
+                if old_preview:
+                    delete_file_row(c, old_preview)
 
 
 def _stored(fid: int) -> str:

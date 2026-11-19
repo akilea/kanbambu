@@ -1,8 +1,10 @@
 """Read slicing data and thumbnails out of Bambu Studio 3MF files.
 
-A plate exported with "Export plate sliced file" (.gcode.3mf) carries
-Metadata/slice_info.config with print time, weight and per-filament usage.
-A plain project .3mf only carries thumbnails (Metadata/plate_N.png).
+- Metadata/slice_info.config: print time, weight and per-filament usage of each
+  sliced plate (present in .gcode.3mf exports and in projects saved after slicing).
+- Metadata/model_settings.config: the plates of a project (name, objects), sliced or not.
+- Metadata/plate_N.png: Bambu Studio's preview of plate N.
+- Metadata/project_settings.config: filament profile names and cost per kg.
 """
 from __future__ import annotations
 
@@ -23,82 +25,147 @@ def _num(v, cast=float, default=0):
         return default
 
 
+def _xml(z: zipfile.ZipFile, names: set, name: str) -> Optional[ET.Element]:
+    if name not in names:
+        return None
+    try:
+        return ET.fromstring(z.read(name))
+    except ET.ParseError:
+        return None
+
+
 def parse_3mf(path: str) -> dict:
-    """Return {"analysis": dict|None, "thumbnail": bytes|None}."""
-    out: dict = {"analysis": None, "thumbnail": None}
+    """Return {
+        "analysis": all sliced plates merged (dict) or None,
+        "thumbnail": first plate preview (bytes) or None,
+        "plates": [{index, name, objects, thumbnail, analysis}] for every plate of the project,
+    }"""
+    out: dict = {"analysis": None, "thumbnail": None, "plates": []}
     try:
         z = zipfile.ZipFile(path)
     except (zipfile.BadZipFile, OSError):
         return out
     with z:
         names = set(z.namelist())
-        out["thumbnail"] = _thumbnail(z, names)
-        if "Metadata/slice_info.config" in names:
-            out["analysis"] = _slice_info(z, names)
+        settings = _settings(z, names)
+        sliced = _sliced_plates(z, names, settings)          # {index: analysis}
+        layout = _layout_plates(z, names)                    # {index: {name, objects}}
+        indices = sorted(set(sliced) | set(layout))
+        for i in indices:
+            lay = layout.get(i, {})
+            a = sliced.get(i)
+            out["plates"].append({
+                "index": i,
+                "name": lay.get("name") or "",
+                "objects": (a or {}).get("objects") or lay.get("objects", 0),
+                "thumbnail": _plate_thumb(z, names, i),
+                "analysis": a,
+            })
+        out["thumbnail"] = next((p["thumbnail"] for p in out["plates"] if p["thumbnail"]), None) \
+            or _any_thumb(z, names)
+        if sliced:
+            out["analysis"] = merge([sliced[i] for i in sorted(sliced)])
     return out
 
 
-def _thumbnail(z: zipfile.ZipFile, names: set) -> Optional[bytes]:
-    for cand in ("Metadata/plate_1.png", "Metadata/thumbnail.png",
-                 "Metadata/plate_1_small.png", "Metadata/top_1.png"):
+# ---------- pieces ----------
+
+def _settings(z, names) -> dict:
+    if "Metadata/project_settings.config" not in names:
+        return {}
+    try:
+        cfg = json.loads(z.read("Metadata/project_settings.config"))
+        return cfg if isinstance(cfg, dict) else {}
+    except ValueError:
+        return {}
+
+
+def _at(lst, i, default=""):
+    return lst[i] if isinstance(lst, list) and 0 <= i < len(lst) else default
+
+
+def _sliced_plates(z, names, settings) -> dict:
+    root = _xml(z, names, "Metadata/slice_info.config")
+    if root is None:
+        return {}
+    profiles = settings.get("filament_settings_id") or []
+    costs = settings.get("filament_cost") or []
+    out = {}
+    for n, plate in enumerate(root.findall("plate"), 1):
+        m = _meta(plate)
+        idx = _num(m.get("index"), int, n)
+        fils = []
+        for f in plate.findall("filament"):
+            fid = _num(f.get("id"), int, 0)
+            g = round(_num(f.get("used_g")), 2)
+            cost_kg = _num(_at(costs, fid - 1, 0))
+            fils.append({
+                "id": fid,
+                "type": f.get("type") or "",
+                "color": (f.get("color") or "#888888")[:7],
+                "g": g,
+                "m": round(_num(f.get("used_m")), 2),
+                "profile": _at(profiles, fid - 1),
+                "cost": round(g / 1000 * cost_kg, 2),
+            })
+        time_s = _num(m.get("prediction"), int, 0)
+        if not time_s and not fils:
+            continue  # plate listed but not sliced
+        weight = round(_num(m.get("weight")), 2) or round(sum(f["g"] for f in fils), 2)
+        a = {
+            "time_s": time_s,
+            "g": weight,
+            "cost": round(sum(f["cost"] for f in fils), 2),
+            "objects": sum(1 for o in plate.findall("object") if o.get("skipped", "false") != "true"),
+            "plates": [{"index": idx, "time_s": time_s, "g": weight}],
+            "filaments": sorted(fils, key=lambda f: -f["g"]),
+        }
+        out[idx] = a
+    return out
+
+
+def _layout_plates(z, names) -> dict:
+    root = _xml(z, names, "Metadata/model_settings.config")
+    if root is None:
+        return {}
+    out = {}
+    for n, plate in enumerate(root.findall("plate"), 1):
+        m = _meta(plate)
+        idx = _num(m.get("plater_id"), int, n)
+        out[idx] = {"name": (m.get("plater_name") or "").strip(),
+                    "objects": len(plate.findall("model_instance"))}
+    return out
+
+
+def _plate_thumb(z, names, i) -> Optional[bytes]:
+    for cand in (f"Metadata/plate_{i}.png", f"Metadata/plate_{i}_small.png", f"Metadata/top_{i}.png"):
         if cand in names:
             return z.read(cand)
+    return None
+
+
+def _any_thumb(z, names) -> Optional[bytes]:
+    if "Metadata/thumbnail.png" in names:
+        return z.read("Metadata/thumbnail.png")
     pngs = sorted(n for n in names if n.startswith("Metadata/plate_") and n.endswith(".png"))
     return z.read(pngs[0]) if pngs else None
 
 
-def _profile_names(z: zipfile.ZipFile, names: set) -> list:
-    if "Metadata/project_settings.config" not in names:
-        return []
-    try:
-        cfg = json.loads(z.read("Metadata/project_settings.config"))
-        ids = cfg.get("filament_settings_id") or []
-        return ids if isinstance(ids, list) else []
-    except (ValueError, KeyError):
-        return []
-
-
-def _slice_info(z: zipfile.ZipFile, names: set) -> Optional[dict]:
-    try:
-        root = ET.fromstring(z.read("Metadata/slice_info.config"))
-    except ET.ParseError:
-        return None
-    profiles = _profile_names(z, names)
-    plates = []
+def merge(analyses: list) -> dict:
+    """Combine several plate analyses (or card analyses) into one, filaments grouped by slot/color."""
     totals: dict = {}
-    objects = 0
-    for plate in root.findall("plate"):
-        m = _meta(plate)
-        objects += sum(1 for o in plate.findall("object") if o.get("skipped", "false") != "true")
-        fils = []
-        for f in plate.findall("filament"):
-            fid = _num(f.get("id"), int, 0)
-            fil = {
-                "id": fid,
-                "type": f.get("type") or "",
-                "color": (f.get("color") or "#888888")[:7],
-                "g": round(_num(f.get("used_g")), 2),
-                "m": round(_num(f.get("used_m")), 2),
-                "profile": profiles[fid - 1] if 0 < fid <= len(profiles) else "",
-            }
-            fils.append(fil)
-            key = (fil["color"].upper(), fil["type"])
-            t = totals.setdefault(key, {"color": fil["color"], "type": fil["type"],
-                                        "profile": fil["profile"], "g": 0.0, "m": 0.0})
-            t["g"] = round(t["g"] + fil["g"], 2)
-            t["m"] = round(t["m"] + fil["m"], 2)
-        plates.append({
-            "index": _num(m.get("index"), int, len(plates) + 1),
-            "time_s": _num(m.get("prediction"), int, 0),
-            "g": round(_num(m.get("weight")), 2),
-            "filaments": fils,
-        })
-    if not plates:
-        return None
+    for a in analyses:
+        for f in a["filaments"]:
+            key = (f.get("id"), f["color"].upper(), f["type"])
+            t = totals.setdefault(key, {**f, "g": 0.0, "m": 0.0, "cost": 0.0})
+            t["g"] = round(t["g"] + f["g"], 2)
+            t["m"] = round(t["m"] + f["m"], 2)
+            t["cost"] = round(t["cost"] + f.get("cost", 0), 2)
     return {
-        "time_s": sum(p["time_s"] for p in plates),
-        "g": round(sum(p["g"] or sum(f["g"] for f in p["filaments"]) for p in plates), 2),
-        "plates": plates,
+        "time_s": sum(a["time_s"] for a in analyses),
+        "g": round(sum(a["g"] for a in analyses), 2),
+        "cost": round(sum(a.get("cost", 0) for a in analyses), 2),
+        "objects": sum(a.get("objects", 0) for a in analyses),
+        "plates": [p for a in analyses for p in a["plates"]],
         "filaments": sorted(totals.values(), key=lambda t: -t["g"]),
-        "objects": objects,
     }
