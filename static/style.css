@@ -3,9 +3,12 @@
   --park: #8a93a3; --analysed: #3b82f6; --printing: #f59e0b; --done: #22a06b; --fail: #e5484d;
   --r: 10px; --shadow: 0 1px 2px rgba(0,0,0,.06), 0 1px 3px rgba(0,0,0,.05);
 }
+/* Dark: chosen with the moon button, or by the system when nothing was chosen. */
+:root[data-theme="dark"] { --bg: #14171c; --panel: #1d2128; --line: #2c313a; --text: #e6e8ec; --mute: #8b93a1;
+          --shadow: 0 1px 2px rgba(0,0,0,.4); color-scheme: dark; }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #14171c; --panel: #1d2128; --line: #2c313a; --text: #e6e8ec; --mute: #8b93a1;
-          --shadow: 0 1px 2px rgba(0,0,0,.4); }
+  :root:not([data-theme="light"]) { --bg: #14171c; --panel: #1d2128; --line: #2c313a; --text: #e6e8ec; --mute: #8b93a1;
+          --shadow: 0 1px 2px rgba(0,0,0,.4); color-scheme: dark; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; font: 14px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;

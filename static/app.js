@@ -475,6 +475,22 @@ function projectModal(p) {
   if ($("#rmBambu", s)) armDelete($("#rmBambu", s), async () => { await api("DELETE", `/api/files/${p.bambu.id}`); refresh(); });
 }
 
+/* ---------------- theme ---------------- */
+
+const isDark = () => {
+  const t = document.documentElement.dataset.theme;
+  return t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+};
+const drawThemeBtn = () => ($("#theme").innerHTML = ic(isDark() ? "sun" : "moon"));
+$("#theme").onclick = () => {
+  const t = isDark() ? "light" : "dark";
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem("kanbambu-theme", t); } catch (e) {}
+  drawThemeBtn();
+};
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawThemeBtn);
+drawThemeBtn();
+
 /* ---------------- boot ---------------- */
 
 $("#addProject").onclick = async () => {
