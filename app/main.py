@@ -154,6 +154,16 @@ def set_composition(c, card_id: int, comp: Dict[int, int]):
     for pid, q in comp.items():
         if q > 0:
             c.execute("INSERT INTO card_parts (card_id, part_id, qty) VALUES (?,?,?)", (card_id, int(pid), int(q)))
+    # Prints recorded before the card had a composition: a success produced the whole plate.
+    full = {int(pid): [int(q), int(q)] for pid, q in comp.items() if q > 0}
+    c.execute("UPDATE attempts SET parts=? WHERE card_id=? AND result='success' AND (parts IS NULL OR parts='{}')",
+              (json.dumps(full), card_id))
+    c.execute("UPDATE attempts SET parts=? WHERE card_id=? AND result='fail' AND (parts IS NULL OR parts='{}')",
+              (json.dumps({pid: [0, q] for pid, (_ok, q) in full.items()}), card_id))
+
+
+def has_composition(c, card_id: int) -> bool:
+    return c.execute("SELECT 1 FROM card_parts WHERE card_id=? LIMIT 1", (card_id,)).fetchone() is not None
 
 
 def composition_from_names(c, project_id: int, names: dict, create_per_set: int = 1) -> Dict[int, int]:
@@ -535,7 +545,7 @@ def import_plates(project_id: int, plates: list):
             for extra in same[1:]:  # duplicates of this plate: refresh slicing data and composition
                 if a:
                     c.execute("UPDATE cards SET analysis=? WHERE id=?", (json.dumps(a), extra["id"]))
-                if comp and extra["lane"] != "done":
+                if comp and (extra["lane"] != "done" or not has_composition(c, extra["id"])):
                     set_composition(c, extra["id"], comp)
             card = same[0] if same else None
             if card is None:
@@ -557,7 +567,8 @@ def import_plates(project_id: int, plates: list):
                         c.execute("UPDATE cards SET lane='analysed' WHERE id=?", (cid,))
                 if pl["name"] and card["title"].startswith("Plateau "):
                     c.execute("UPDATE cards SET title=? WHERE id=?", (pl["name"], cid))
-                if comp and card["lane"] != "done":
+                # done cards keep what they printed, unless they predate parts (then they count as printed)
+                if comp and (card["lane"] != "done" or not has_composition(c, cid)):
                     set_composition(c, cid, comp)
         if pl["thumbnail"]:
             tid = store_bytes(pl["thumbnail"], "preview.png", card_id=cid)

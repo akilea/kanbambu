@@ -300,3 +300,25 @@ def test_parts_inventory():
            files={"file": ("x.gcode.3mf", _zip(slice_info=MIXED_SLICE))})
     assert {x["name"] for x in next(q for q in get()["cards"] if q["id"] == k["id"])["parts"]} == {"Bras AMS", "Base"}
     c.delete(f"/api/projects/{pid}")
+
+
+def test_parts_added_after_printing():
+    """Plates printed before the project had parts count as produced once the .3mf is re-imported."""
+    c = TestClient(app)
+    pid = c.post("/api/projects", json={"name": "Ancien"}).json()["id"]
+    # old-style import: no object names yet -> no parts
+    c.post("/api/upload", data={"project_id": pid, "role": "bambu"},
+           files={"file": ("p.3mf", _zip(slice_info=AMS_SLICE))})
+    card = c.get("/api/board").json()["projects"]
+    card = next(p for p in card if p["id"] == pid)["cards"][0]
+    with __import__("app.db", fromlist=["conn"]).conn() as cx:   # simulate a pre-parts database
+        cx.execute("DELETE FROM card_parts"); cx.execute("DELETE FROM parts WHERE project_id=?", (pid,))
+    c.post("/api/cards/move", json={"card_id": card["id"], "project_id": pid, "lane": "done",
+                                    "ids": [card["id"]], "result": "success"})
+    c.patch(f"/api/projects/{pid}", json={"sets": 2})
+    c.post("/api/upload", data={"project_id": pid, "role": "bambu"},
+           files={"file": ("p.3mf", _zip(model_settings=AMS_SETTINGS, slice_info=AMS_SLICE))})
+    pr = next(p for p in c.get("/api/board").json()["projects"] if p["id"] == pid)
+    inv = {x["name"]: (x["need"], x["produced"], x["todo"]) for x in pr["parts"]}
+    assert inv["Base"] == (2, 1, 1)
+    c.delete(f"/api/projects/{pid}")

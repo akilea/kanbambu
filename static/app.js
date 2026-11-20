@@ -569,7 +569,7 @@ function projectModal(p) {
           <span title="Par exemplaire">${stepper(`per-${x.id}`, x.per_set)}</span>
           <span class="sub num-r" title="Produites / à produire">${x.produced}/${x.need}${x.todo ? ` · +${x.todo}` : ""}</span>
           <button class="ib" data-del-part="${x.id}" title="Supprimer">${ic("x", "sm")}</button>
-        </div>`).join("")}</div>
+        </div>`).join("") || `<div class="sub" style="padding:4px 6px">Aucune pièce : ajoute le .3mf du projet (${ic("upload", "sm")}) ou une pièce (${ic("plus", "sm")}) pour suivre les exemplaires.</div>`}</div>
       <button class="add-card" id="addPart" title="Ajouter une pièce">${ic("plus")}</button>
     </div>
     ${p.stats ? statsHtml(p.stats) : ""}
