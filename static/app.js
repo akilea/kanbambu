@@ -280,7 +280,9 @@ function onCardDrop(e) {
   const ids = [...to.children].map((x) => +x.dataset.id);
   const move = (extra = {}) => api("POST", "/api/cards/move", { card_id: id, project_id, lane, ids, ...extra }).then(load);
   if (lane === card.lane) return move();
-  if (lane === "done") return doneModal(card, (result, note, parts) => move({ result, note, parts }), load);
+  if (lane === "done") return finishPrint(card);
+  // Printing -> Queue: the print ended and the plate goes back in line (or it never printed)
+  if (card.lane === "printing" && lane === "analysed") return finishPrint(card, { dest: "analysed", allowCancel: true });
   if (card.lane === "done") {
     // Only a failed print is a retry that needs "what changed". After a success (full or partial)
     // the card simply goes back: next plate, missing pieces, or the same print again.
@@ -298,7 +300,8 @@ function moveCard(card, lane) {
   const p = findProject(card.project_id);
   const ids = p.cards.filter((c) => c.lane === lane && c.id !== card.id).map((c) => c.id).concat(card.id);
   const go = (extra = {}) => api("POST", "/api/cards/move", { card_id: card.id, project_id: p.id, lane, ids, ...extra }).then(load);
-  if (lane === "done") return doneModal(card, (result, note, parts) => go({ result, note, parts }), load);
+  if (lane === "done") return finishPrint(card);
+  if (card.lane === "printing" && lane === "analysed") return finishPrint(card, { dest: "analysed", allowCancel: true });
   const last = card.attempts[card.attempts.length - 1];
   if (card.lane === "done" && last && last.result === "fail") return retryModal(card, (change) => go({ change }), load);
   return go();
@@ -369,7 +372,9 @@ function dropZone(el, onFiles) {
   el.ondrop = (e) => { e.preventDefault(); el.classList.remove("over"); onFiles([...e.dataTransfer.files]); };
 }
 
-function doneModal(card, onSave, onCancel) {
+/* End of a print: result (✓ / ✗, pieces that came out good), then where the card goes next.
+   "Queue" records the result and puts the plate back in line in one step. */
+function doneModal(card, { dest = null, allowCancel = false, onSave, onCancel }) {
   const s = openModal(`
     <div class="row"><b>${esc(card.title)}</b></div>
     <div class="choice">
@@ -379,12 +384,28 @@ function doneModal(card, onSave, onCancel) {
     <div class="list" id="got" hidden>${card.parts.map((x) => `
       <div class="li"><span class="name">${esc(x.name)}</span>${stepper(`got-${x.part_id}`, x.qty, 0, x.qty)}<span class="sub">/ ${x.qty}</span></div>`).join("")}</div>
     <textarea id="note"></textarea>
-    <div class="foot"><span></span><button class="btn primary" id="save" disabled>${ic("save")}</button></div>`, onCancel);
-  let result = null;
-  const note = $("#note", s), save = $("#save", s);
-  wireSteppers(s);
+    <div id="next" hidden>
+      <div class="sec-h" style="margin-bottom:6px">Ensuite</div>
+      <div class="seg">
+        <button class="t-done" data-dest="done" title="Terminé">${ic("flag-triangle-right")}<span>Done</span></button>
+        <button class="t-analysed" data-dest="analysed" title="Remettre en file pour la suite">${ic("list-todo")}<span>Queue</span></button>
+      </div>
+    </div>
+    <textarea id="chg" placeholder="Qu'est-ce qui change ?" hidden></textarea>
+    <div class="foot">
+      ${allowCancel ? `<button class="btn" id="notPrinted" title="Pas imprimé : retour en Queue sans résultat">${ic("rotate-ccw")}</button>` : "<span></span>"}
+      <button class="btn primary" id="save" disabled>${ic("save")}</button>
+    </div>`, onCancel);
+  let result = null, where = dest, touched = !!dest;
+  const note = $("#note", s), chg = $("#chg", s), save = $("#save", s);
+  wireSteppers(s, () => { if (!touched) pickDest(); });
   const got = () => Object.fromEntries(card.parts.map((x) => [x.part_id, +$(`#got-${x.part_id}`, s).value]));
-  const upd = () => { save.disabled = !result || (result === "fail" && !note.value.trim()); };
+  const upd = () => {
+    s.querySelectorAll("[data-dest]").forEach((b) => b.classList.toggle("sel", b.dataset.dest === where));
+    chg.hidden = !(result === "fail" && where === "analysed");
+    save.disabled = !result || (result === "fail" && !note.value.trim()) || (!chg.hidden && !chg.value.trim());
+  };
+  const pickDest = () => { where = nextLaneAfter(card, result, got()); upd(); };
   s.querySelectorAll(".choice button").forEach((b) => (b.onclick = () => {
     result = b.dataset.r;
     s.querySelectorAll(".choice button").forEach((x) => x.classList.toggle("sel", x === b));
@@ -392,11 +413,53 @@ function doneModal(card, onSave, onCancel) {
     // pieces that came out good: all of them on success, none on failure; adjustable for a partial print
     card.parts.forEach((x) => ($(`#got-${x.part_id}`, s).value = result === "success" ? x.qty : 0));
     $("#got", s).hidden = !card.parts.length || result === "fail";
+    $("#next", s).hidden = false;
+    if (!touched) pickDest(); else upd();
     note.focus();
-    upd();
   }));
+  s.querySelectorAll("[data-dest]").forEach((b) => (b.onclick = () => { where = b.dataset.dest; touched = true; upd(); }));
   note.oninput = upd;
-  save.onclick = () => { closeModal(true); onSave(result, note.value.trim(), card.parts.length ? got() : undefined); };
+  chg.oninput = upd;
+  save.onclick = () => {
+    closeModal(true);
+    onSave({ result, note: note.value.trim(), parts: card.parts.length ? got() : undefined,
+             dest: where || "done", change: chg.hidden ? undefined : chg.value.trim() });
+  };
+  if (allowCancel) $("#notPrinted", s).onclick = () => { closeModal(true); onSave({ cancelled: true }); };
+}
+
+/* Should this plate go back in the Queue after this print? Yes after a failure, or when the
+   project still needs more of what it prints once this result is counted. */
+function nextLaneAfter(card, result, got) {
+  if (!result) return null;
+  if (result === "fail") return "analysed";
+  const p = findProject(card.project_id);
+  if (card.parts.length) {
+    const more = card.parts.some((x) => {
+      const inv = p.parts.find((q) => q.id === x.part_id);
+      if (!inv) return false;
+      const ok = got[x.part_id] ?? x.qty;
+      return inv.need - (inv.produced + ok) - (inv.pipeline - x.qty) > 0;
+    });
+    return more ? "analysed" : "done";
+  }
+  return card.plates_left > 1 ? "analysed" : "done";
+}
+
+/* Record the end of a print and send the card to Done or back to the Queue, in one go. */
+function finishPrint(card, { dest = null, allowCancel = false } = {}) {
+  const p = findProject(card.project_id);
+  const idsFor = (lane) => p.cards.filter((c) => c.lane === lane && c.id !== card.id).map((c) => c.id).concat(card.id);
+  const mv = (lane, extra = {}) => api("POST", "/api/cards/move", { card_id: card.id, project_id: p.id, lane, ids: idsFor(lane), ...extra });
+  doneModal(card, {
+    dest, allowCancel, onCancel: load,
+    onSave: async (r) => {
+      if (r.cancelled) { await mv("analysed"); return load(); }
+      await mv("done", { result: r.result, note: r.note, parts: r.parts });
+      if (r.dest === "analysed") await mv("analysed", r.change ? { change: r.change } : {});
+      load();
+    },
+  });
 }
 
 /* Small − n + control. */

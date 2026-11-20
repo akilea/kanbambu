@@ -103,6 +103,16 @@ total de filament de l'en-tête comptent seulement les plateaux restants.
 
 Une carte = un plateau tranché (`Export plate sliced file`).
 
+### Fin d'une impression
+
+Quand une impression se termine, une seule fenêtre : ✓ ou ✗ (et les pièces réussies), puis **Ensuite** :
+🏁 Done ou ↺ Queue. kanbambu présélectionne Queue après un échec ou quand le projet a encore besoin de ce
+plateau (pièces encore manquantes, plateaux restants) ; tu peux changer. Pas besoin de passer par Done pour
+remettre un plateau en file.
+
+- Glisser de Printing vers Queue ouvre la même fenêtre, avec ↺ « Pas imprimé » pour revenir sans résultat.
+- Après un ✗ renvoyé en Queue, la fenêtre demande aussi ce qui change.
+
 ### Done et réessais
 
 - Entrer dans **Done** demande ✓ (amélioration possible, optionnelle) ou ✗ (raison obligatoire).
