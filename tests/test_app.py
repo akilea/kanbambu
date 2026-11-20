@@ -322,3 +322,15 @@ def test_parts_added_after_printing():
     inv = {x["name"]: (x["need"], x["produced"], x["todo"]) for x in pr["parts"]}
     assert inv["Base"] == (2, 1, 1)
     c.delete(f"/api/projects/{pid}")
+
+
+def test_manual_time():
+    c = TestClient(app)
+    pid = c.post("/api/projects", json={"name": "Main"}).json()["id"]
+    k = c.post("/api/cards", json={"project_id": pid, "title": "Sans slicing"}).json()
+    a = {"manual": True, "time_s": 5400, "g": 0, "cost": 0, "plates": [{"index": 1, "time_s": 5400, "g": 0}], "filaments": []}
+    assert c.patch(f"/api/cards/{k['id']}", json={"analysis": a}).json()["analysis"]["time_s"] == 5400
+    pr = next(p for p in c.get("/api/board").json()["projects"] if p["id"] == pid)
+    assert pr["stats"]["time_s"] == 5400
+    assert c.patch(f"/api/cards/{k['id']}", json={"analysis": {}}).json()["analysis"] is None
+    c.delete(f"/api/projects/{pid}")

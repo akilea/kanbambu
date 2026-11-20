@@ -24,6 +24,21 @@ const fmtTime = (s) => {
   if (d) return `${d}j${h}h${String(m).padStart(2, "0")}`;
   return h ? `${h}h${String(m).padStart(2, "0")}` : `${m}m`;
 };
+/* "1h30", "1:30", "90m", "90" (minutes), "1j2h" -> seconds */
+function parseDuration(txt) {
+  const t = String(txt || "").trim().toLowerCase().replace(/\s+/g, "");
+  if (!t) return 0;
+  let m;
+  if ((m = t.match(/^(\d+):(\d{1,2})$/))) return (+m[1] * 60 + +m[2]) * 60;
+  if (/^\d+$/.test(t)) return +t * 60;
+  let s = 0;
+  for (const [, n, u] of t.matchAll(/(\d+(?:[.,]\d+)?)([jdhm]?)/g)) {
+    const v = parseFloat(n.replace(",", "."));
+    s += u === "j" || u === "d" ? v * 86400 : u === "h" ? v * 3600 : v * 60;
+  }
+  return Math.round(s);
+}
+
 const fmtCost = (c) => (c ? `${c.toFixed(2)} $` : "");
 const fmtG = (g) => (g >= 1000 ? `${(g / 1000).toFixed(2)}kg` : `${Math.round(g)}g`);
 const fmtDate = (d) => (d ? new Date(d.replace(" ", "T") + "Z").toLocaleDateString("fr-CA", { month: "short", day: "numeric" }) : "");
@@ -186,8 +201,9 @@ function cardHtml(c, p, hidden) {
         ${c.url ? `<a class="ib" href="${esc(c.url)}" target="_blank" rel="noopener" title="Lien" onclick="event.stopPropagation()">${ic("link", "sm")}</a>` : ""}
         ${bambu ? bambuBtn(bambu) : ""}
         ${!c.parts.length && (c.plates > 1 || c.plates_done) ? `<span title="Plateaux imprimés / total">${ic("layers", "sm")} ${c.plates_done}/${c.plates}</span>` : ""}
-        ${a && a.time_s ? `<span title="Temps restant">${ic("clock", "sm")} ${fmtTime(a.time_s * mult)}</span>` : ""}
-        ${a && a.g ? `<span title="Filament restant">${ic("weight", "sm")} ${fmtG(a.g * mult)}</span>` : ""}
+        ${a && a.time_s ? `<span class="ptime" title="Temps d'un plateau${mult > 1 ? ` · ${mult} plateaux restants = ${fmtTime(a.time_s * mult)}` : ""}">${ic("clock", "sm")} ${fmtTime(a.time_s)}</span>` : ""}
+        ${a && a.g ? `<span title="Filament d'un plateau${mult > 1 ? ` · reste ${fmtG(a.g * mult)}` : ""}">${ic("weight", "sm")} ${fmtG(a.g)}</span>` : ""}
+        ${a && (a.time_s || a.g) && mult > 1 ? `<span title="Plateaux restants">×${mult}</span>` : ""}
         ${a ? a.filaments.map((f) => `<span class="dot" style="background:${esc(f.color)}" title="${esc(f.type)} ${fmtG(f.g)}"></span>`).join("") : ""}
         ${c.pending_change ? `<span class="retry" title="${esc(c.pending_change)}">${ic("rotate-ccw", "sm")}</span>` : ""}
         ${c.ok ? `<span class="ok">${ic("circle-check", "sm")}${c.ok}</span>` : ""}
@@ -545,7 +561,14 @@ function cardModal(c) {
       <div class="drop-zone" id="dz" title="STL, 3MF, .gcode.3mf, image">${ic("upload")}</div>
     </div>
 
-    ${a ? `
+    ${!a || a.manual ? `
+    <div class="sec">
+      <div class="sec-h">${ic("clock", "sm")} Temps du plateau</div>
+      <div class="row"><input id="mtime" placeholder="ex. 1h30" value="${a && a.time_s ? fmtTime(a.time_s) : ""}" style="width:110px">
+        <span class="sub">sans slicing : à la main, ou glisse le .gcode.3mf</span></div>
+    </div>` : ""}
+
+    ${a && !a.manual ? `
     <div class="sec">
       <div class="sec-h">${ic("scan-search", "sm")} Slicing
         <span class="stats" style="margin-left:auto;text-transform:none">
@@ -611,6 +634,12 @@ function cardModal(c) {
   });
   $("#url", s).onchange = (e) => patch({ url: e.target.value.trim() });
   $("#notes", s).onchange = (e) => patch({ notes: e.target.value });
+  if ($("#mtime", s)) $("#mtime", s).onchange = async (e) => {
+    const t = parseDuration(e.target.value);
+    // a hand-entered time stands in for slicing data until a .gcode.3mf replaces it
+    await patch({ analysis: t ? { manual: true, time_s: t, g: 0, cost: 0, plates: [{ index: 1, time_s: t, g: 0 }], filaments: [] } : {} });
+    refreshCard();
+  };
   $("#close", s).onclick = () => closeModal();
   armDelete($("#del", s), async () => { await api("DELETE", `/api/cards/${c.id}`); closeModal(); });
 

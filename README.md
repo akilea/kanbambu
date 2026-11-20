@@ -50,6 +50,10 @@ miniature comme aperçu.
 
 Un `.3mf` de projet normal ne contient pas les grammes. Il donne seulement la miniature.
 
+Chaque carte affiche le **temps et le poids d'un plateau** (⏱ 1h40 ⚖ 48g), suivis de `×N` quand il reste
+plusieurs plateaux (le total restant est dans l'infobulle). Sans slicing, la fiche de la carte permet d'entrer
+le temps à la main (`1h30`, `90m`, `1:30`) ; un `.gcode.3mf` ajouté ensuite le remplace.
+
 L'en-tête affiche le total de filament par couleur pour tout ce qui est en Queue et Printing (plateaux restants).
 
 ### Projet Bambu : une carte par plateau

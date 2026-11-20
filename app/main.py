@@ -91,7 +91,7 @@ def card_dict(c, r) -> dict:
         "plate_index": r["plate_index"],
         "preview": f"/files/{r['preview_file_id']}/preview" if r["preview_file_id"] else None,
         "preview_file_id": r["preview_file_id"],
-        "analysis": json.loads(r["analysis"]) if r["analysis"] else None,
+        "analysis": (json.loads(r["analysis"]) or None) if r["analysis"] else None,
         "pending_change": r["pending_change"],
         "files": files, "attempts": attempts, "parts": comp,
         "ok": ok,
@@ -311,8 +311,8 @@ def create_card(body: CardIn):
 @app.patch("/api/cards/{cid}")
 def update_card(cid: int, body: CardIn):
     fields = {k: v for k, v in body.model_dump().items() if v is not None and k != "project_id"}
-    if "analysis" in fields:
-        fields["analysis"] = json.dumps(fields["analysis"])
+    if "analysis" in fields:  # {} clears it (e.g. a hand-entered time erased)
+        fields["analysis"] = json.dumps(fields["analysis"]) if fields["analysis"] else None
     with db.conn() as c:
         if fields:
             sets = ", ".join(f"{k}=?" for k in fields)
