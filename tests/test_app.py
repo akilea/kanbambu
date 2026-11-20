@@ -334,3 +334,38 @@ def test_manual_time():
     assert pr["stats"]["time_s"] == 5400
     assert c.patch(f"/api/cards/{k['id']}", json={"analysis": {}}).json()["analysis"] is None
     c.delete(f"/api/projects/{pid}")
+
+
+SAVED_PROJECT_SLICE = """<?xml version="1.0" encoding="UTF-8"?>
+<config><header><header_item key="X-BBL-Client-Type" value="slicer"/></header></config>"""
+
+ALL_PLATES_SLICE = """<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <plate><metadata key="index" value="1"/><metadata key="prediction" value="3600"/><metadata key="weight" value="50"/>
+    <object identify_id="1" name="Base.stl" skipped="false"/>
+    <filament id="1" type="PLA" color="#000000" used_m="16" used_g="50"/></plate>
+  <plate><metadata key="index" value="2"/><metadata key="prediction" value="5400"/><metadata key="weight" value="70"/>
+    <object identify_id="2" name="Bras" skipped="false"/><object identify_id="3" name="Bras" skipped="false"/>
+    <object identify_id="4" name="Clip" skipped="false"/>
+    <filament id="1" type="PLA" color="#000000" used_m="23" used_g="70"/></plate>
+</config>"""
+
+
+def test_slicing_from_export():
+    """A saved Bambu project has an empty slice_info: times come from 'Export all plate sliced file'."""
+    c = TestClient(app)
+    pid = c.post("/api/projects", json={"name": "Stacker"}).json()["id"]
+    c.post("/api/upload", data={"project_id": pid, "role": "bambu"},
+           files={"file": ("p.3mf", _zip(model_settings=AMS_SETTINGS, slice_info=SAVED_PROJECT_SLICE))})
+    pr = lambda: next(p for p in c.get("/api/board").json()["projects"] if p["id"] == pid)  # noqa: E731
+    assert all(k["analysis"] is None for k in pr()["cards"]) and pr()["stats"] is None
+    r = c.post("/api/upload", data={"project_id": pid, "role": "slicing"},
+               files={"file": ("p.gcode.3mf", _zip(slice_info=ALL_PLATES_SLICE))}).json()
+    assert r == {"plates": 2, "updated": 2}
+    times = {k["plate_index"]: k["analysis"]["time_s"] for k in pr()["cards"]}
+    assert times == {1: 3600, 2: 5400} and pr()["stats"]["time_s"] == 9000
+    assert pr()["bambu"]["name"] == "p.3mf"          # the project file is kept
+    bad = c.post("/api/upload", data={"project_id": pid, "role": "slicing"},
+                 files={"file": ("p.3mf", _zip(slice_info=SAVED_PROJECT_SLICE))})
+    assert bad.status_code == 422
+    c.delete(f"/api/projects/{pid}")

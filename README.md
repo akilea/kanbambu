@@ -71,6 +71,12 @@ une carte par plateau, avec le nom du plateau et l'aperçu de Bambu Studio. Les 
 avec leur temps et leurs grammes. Pour avoir les stats de tous les plateaux, fais **Trancher tout**
 puis enregistre le projet avant de l'ajouter.
 
+**Temps et filament :** Bambu Studio ne garde pas les résultats du slicing dans un projet enregistré
+(`slice_info.config` est vide), même après *Trancher tout*. Pour les avoir, fais
+**Fichier → Exporter → Exporter tous les fichiers de plateaux tranchés** et glisse ce `.gcode.3mf` dans la
+zone ⏱ de la fiche du projet. Chaque carte de plateau reçoit son temps, ses grammes et son coût ; le `.3mf`
+du projet reste le fichier ouvert dans Bambu Studio. À refaire après un nouveau slicing.
+
 La fiche du projet montre alors les totaux, comme le panneau « All Plates Stats » de Bambu Studio : filament
 par emplacement (m, g, coût), temps par plateau, total et reste. L'en-tête du projet affiche le temps et le
 poids qui restent.

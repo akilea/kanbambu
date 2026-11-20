@@ -698,6 +698,11 @@ function projectModal(p) {
             <button class="ib" id="rmBambu" title="Retirer">${ic("trash-2")}</button>`
           : `<div class="drop-zone" id="bz" style="flex:1;padding:6px" title="Projet Bambu Studio (.3mf)">${ic("upload")} .3mf</div>`}
         </div>
+        <div class="row">${ic("clock")}
+          <div class="drop-zone" id="sz" style="flex:1;padding:6px"
+            title="Bambu Studio : Fichier → Exporter → Exporter tous les fichiers de plateaux tranchés">${ic("upload")} .gcode.3mf · temps et filament de tous les plateaux</div>
+        </div>
+        <div class="sub" id="szMsg" hidden></div>
       </div>
     </div>
     <div class="sec">
@@ -772,6 +777,18 @@ function projectModal(p) {
 
   const refresh = async () => { BOARD = await api("GET", "/api/board"); projectModal(findProject(p.id)); };
   dropZone($("#pimg", s), async (files) => { if (files[0]) { await uploadFile(files[0], { project_id: p.id, role: "image" }); refresh(); } });
+  dropZone($("#sz", s), async (files) => {
+    if (!files[0]) return;
+    const msg = $("#szMsg", s);
+    const fd = new FormData();
+    fd.append("file", files[0]); fd.append("project_id", p.id); fd.append("role", "slicing");
+    const r = await fetch("/api/upload", { method: "POST", body: fd });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { msg.hidden = false; msg.textContent = j.detail || "Lecture impossible"; return; }
+    await refresh();
+    const m2 = $("#szMsg");
+    if (m2) { m2.hidden = false; m2.textContent = `${j.updated} carte(s) mise(s) à jour depuis ${j.plates} plateau(x) tranché(s).`; }
+  });
   if ($("#bz", s)) dropZone($("#bz", s), async (files) => { if (files[0]) { await uploadFile(files[0], { project_id: p.id, role: "bambu" }); refresh(); } });
   if ($("#reBambu", s)) dropZone($("#reBambu", s), async (files) => { if (files[0]) { await uploadFile(files[0], { project_id: p.id, role: "bambu" }); refresh(); } });
   s.querySelectorAll("[data-open-card]").forEach((r) => (r.onclick = () => cardModal(findCard(r.dataset.openCard))));

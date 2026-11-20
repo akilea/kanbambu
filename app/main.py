@@ -470,9 +470,12 @@ def delete_attempt(aid: int):
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...), project_id: Optional[int] = Form(None),
                  card_id: Optional[int] = Form(None), role: str = Form("attach")):
-    """role: attach (card file), preview (card image), image (project image), bambu (project file)."""
+    """role: attach (card file), preview (card image), image (project image), bambu (project file),
+    slicing (a .gcode.3mf of all plates: fills time/filament of the project's plate cards, not kept)."""
     data = await file.read()
     name = safe_name(file.filename)
+    if role == "slicing" and project_id:
+        return import_slicing(project_id, data)
     fid = store_bytes(data, name, project_id if role in ("image", "bambu") else None,
                       card_id if role in ("attach", "preview") else None)
     with db.conn() as c:
@@ -534,6 +537,34 @@ async def upload(file: UploadFile = File(...), project_id: Optional[int] = Form(
                     c.execute("UPDATE projects SET image_file_id=? WHERE id=?", (tid, project_id))
     with db.conn() as c:
         return file_row(c.execute("SELECT * FROM files WHERE id=?", (fid,)).fetchone())
+
+
+def import_slicing(project_id: int, data: bytes) -> dict:
+    """Bambu Studio does not keep slicing results in a saved project. "Export all plate sliced
+    file" does: read it and give each plate card of the project its time, grams and filaments."""
+    tmp = os.path.join(db.FILES_DIR, uuid.uuid4().hex + ".3mf")
+    with open(tmp, "wb") as f:
+        f.write(data)
+    try:
+        info = parse_3mf(tmp)
+    finally:
+        os.remove(tmp)
+    sliced = [p for p in info["plates"] if p["analysis"]]
+    if not sliced:
+        raise HTTPException(422, "Aucun plateau tranché dans ce fichier (il faut un .gcode.3mf exporté).")
+    updated = 0
+    with db.conn() as c:
+        has_plate_cards = c.execute("SELECT 1 FROM cards WHERE project_id=? AND plate_index IS NOT NULL LIMIT 1",
+                                    (project_id,)).fetchone()
+    if not has_plate_cards:  # no project imported yet: the plates become the cards
+        import_plates(project_id, info["plates"])
+        return {"plates": len(sliced), "updated": len(sliced)}
+    for pl in sliced:
+        with db.conn() as c:
+            n = c.execute("UPDATE cards SET analysis=? WHERE project_id=? AND plate_index=?",
+                          (json.dumps(pl["analysis"]), project_id, pl["index"])).rowcount
+        updated += n
+    return {"plates": len(sliced), "updated": updated}
 
 
 def import_plates(project_id: int, plates: list):
