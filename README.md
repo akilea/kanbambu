@@ -35,6 +35,13 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 | Ajouter un fichier à une carte | glisser le fichier sur la carte, ou dans sa fiche |
 | Déplacer | glisser la carte entre les colonnes |
 
+### Sur le cellulaire
+
+Une colonne à la fois, choisie par les onglets en haut : 🧩 Pièces, Queue, Printing, Done (avec le nombre de cartes).
+Chaque carte a un gros bouton pour passer à l'étape suivante (🖨️ vers Printing, 🏁 vers Done) : pas besoin de
+glisser. Dans la fiche d'une carte, les trois boutons Queue / Printing / Done la déplacent aussi (sur ordinateur
+également). Glisser reste possible pour réordonner (appui long).
+
 ### Slicing, automatiquement
 
 Dans Bambu Studio, tranche la plaque puis **File → Export → Export plate sliced file** (`.gcode.3mf`).

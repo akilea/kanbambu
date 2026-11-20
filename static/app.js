@@ -2,6 +2,7 @@
 const LANES = ["analysed", "printing", "done"];   // "analysed" is shown as the Queue
 const LANE_ICON = { analysed: "list-todo", printing: "printer", done: "flag-triangle-right" };
 const LANE_NAME = { analysed: "Queue", printing: "Printing", done: "Done" };
+const NEXT_LANE = { analysed: "printing", printing: "done" };
 let BOARD = { projects: [] };
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -44,9 +45,29 @@ async function load() {
 
 /* ---------------- render ---------------- */
 
+/* Phone: one lane at a time, picked with tabs; "parts" shows the inventories. */
+let MLANE = "analysed";
+try { MLANE = localStorage.getItem("kanbambu-mlane") || MLANE; } catch (e) {}
+function renderTabs() {
+  const n = (l) => BOARD.projects.reduce((a, p) => a + p.cards.filter((c) => c.lane === l).length, 0);
+  const tabs = [["parts", "puzzle", ""], ...LANES.map((l) => [l, LANE_ICON[l], n(l)])];
+  $("#mtabs").innerHTML = tabs.map(([k, icon, count]) =>
+    `<button class="${k === MLANE ? "sel" : ""} t-${k}" data-mlane="${k}" title="${k === "parts" ? "Pièces" : LANE_NAME[k]}">${ic(icon)}<span>${k === "parts" ? "Pièces" : LANE_NAME[k]}</span>${count !== "" ? `<b>${count}</b>` : ""}</button>`).join("");
+  document.body.dataset.mlane = MLANE;
+  $("#mtabs").onclick = (e) => {
+    const b = e.target.closest("[data-mlane]");
+    if (!b) return;
+    MLANE = b.dataset.mlane;
+    try { localStorage.setItem("kanbambu-mlane", MLANE); } catch (err) {}
+    renderTabs();
+    window.scrollTo({ top: 0 });
+  };
+}
+
 function render() {
   const board = $("#board");
   board.innerHTML = BOARD.projects.map(projectHtml).join("");
+  renderTabs();
   $("#empty").hidden = BOARD.projects.length > 0;
   renderTotals();
   wire();
@@ -119,7 +140,7 @@ function projectHtml(p) {
     <div class="p-body">
       <div class="p-side">${inventoryHtml(p)}</div>
       ${LANES.map((l) => `
-        <div class="lane-wrap">
+        <div class="lane-wrap w-${l}">
           <div class="lane-tag t-${l}">${ic(laneIcons[l], "sm")} ${LANE_NAME[l]}</div>
           <div class="lane" data-lane="${l}" data-project="${p.id}">${by[l].map((c, i) => cardHtml(c, p, l === "done" && i >= by.done.length - hiddenDone)).join("")}</div>
           ${l === "done" && by.done.length > DONE_SHOWN ? `<button class="add-card" data-act="more-done" title="${hiddenDone ? "Afficher tout" : "Replier"}">${hiddenDone ? `+${hiddenDone}` : ic("chevron-down")}</button>` : ""}
@@ -160,6 +181,7 @@ function cardHtml(c, p, hidden) {
         ${c.pending_change ? `<span class="retry" title="${esc(c.pending_change)}">${ic("rotate-ccw", "sm")}</span>` : ""}
         ${c.ok ? `<span class="ok">${ic("circle-check", "sm")}${c.ok}</span>` : ""}
         ${c.ko ? `<span class="ko">${ic("circle-x", "sm")}${c.ko}</span>` : ""}
+        ${NEXT_LANE[c.lane] ? `<button class="ib qmove" data-qmove="${NEXT_LANE[c.lane]}" title="${LANE_NAME[NEXT_LANE[c.lane]]}">${ic(LANE_ICON[NEXT_LANE[c.lane]])}</button>` : ""}
         ${relaunch ? `<button class="ib reprint" data-relaunch title="Relancer les pièces manquantes">${ic("rotate-ccw", "sm")}</button>` : ""}
         ${canReprint ? `<button class="ib reprint" data-reprint title="Imprimer le plateau suivant">${ic("printer", "sm")}${ic("plus", "sm")}</button>` : ""}
       </div>
@@ -216,6 +238,8 @@ function wire() {
     const card = e.target.closest(".card");
     if (card && e.target.closest("[data-reprint]")) return reprint(findCard(card.dataset.id));
     if (card && e.target.closest("[data-relaunch]")) return relaunch(findCard(card.dataset.id));
+    const q = e.target.closest("[data-qmove]");
+    if (card && q) return moveCard(findCard(card.dataset.id), q.dataset.qmove);
     if (card) cardModal(findCard(card.dataset.id));
   };
 }
@@ -267,25 +291,24 @@ function onCardDrop(e) {
   return move();
 }
 
-/* Partial or failed print with a composition: back to the Queue with only the missing pieces.
-   A failure asks what changes; a partial success does not. */
-function relaunch(card) {
-  const go = (change) => {
-    const lane = $(`.lane[data-lane="analysed"][data-project="${card.project_id}"]`);
-    const ids = [...lane.children].map((x) => +x.dataset.id).concat(card.id);
-    api("POST", "/api/cards/move", { card_id: card.id, project_id: card.project_id, lane: "analysed", ids, change }).then(load);
-  };
+/* Move a card to the end of another lane without dragging (buttons, phones).
+   Same rules as a drag: Done asks for the result, leaving Done after a failure asks what changes. */
+function moveCard(card, lane) {
+  if (!card || lane === card.lane) return;
+  const p = findProject(card.project_id);
+  const ids = p.cards.filter((c) => c.lane === lane && c.id !== card.id).map((c) => c.id).concat(card.id);
+  const go = (extra = {}) => api("POST", "/api/cards/move", { card_id: card.id, project_id: p.id, lane, ids, ...extra }).then(load);
+  if (lane === "done") return doneModal(card, (result, note, parts) => go({ result, note, parts }), load);
   const last = card.attempts[card.attempts.length - 1];
-  if (last && last.result === "fail") retryModal(card, go);
-  else go();
+  if (card.lane === "done" && last && last.result === "fail") return retryModal(card, (change) => go({ change }), load);
+  return go();
 }
 
+/* Partial or failed print with a composition: back to the Queue with only the missing pieces. */
+const relaunch = (card) => moveCard(card, "analysed");
+
 /* Next plate of a partially printed card: straight back to Printing. */
-function reprint(card) {
-  const lane = $(`.lane[data-lane="printing"][data-project="${card.project_id}"]`);
-  const ids = [...lane.children].map((x) => +x.dataset.id).concat(card.id);
-  return api("POST", "/api/cards/move", { card_id: card.id, project_id: card.project_id, lane: "printing", ids }).then(load);
-}
+const reprint = (card) => moveCard(card, "printing");
 
 function newCardInput(btn, p) {
   const lane = btn.previousElementSibling;
@@ -415,6 +438,7 @@ function cardModal(c) {
       <div class="big-img" id="prev" title="Image">${c.preview ? `<img src="${c.preview}" style="width:100%;height:100%;object-fit:contain;border-radius:10px">` : ic("image", "lg")}</div>
       <div class="sec" style="flex:1">
         <div class="row"><input class="title" id="title" value="${esc(c.title)}"></div>
+        <div class="seg" id="laneSeg">${LANES.map((l) => `<button class="t-${l} ${l === c.lane ? "sel" : ""}" data-to="${l}" title="${LANE_NAME[l]}">${ic(LANE_ICON[l])}<span>${LANE_NAME[l]}</span></button>`).join("")}</div>
         <div class="row" ${usesParts ? "hidden" : ""}>
           <span title="Copies à imprimer">${ic("package")}</span><input class="num" id="qty" type="number" min="1" value="${c.qty}">
           <span title="Copies par plateau">${ic("layers")}</span><input class="num" id="per" type="number" min="1" value="${c.per_plate}">
@@ -500,6 +524,11 @@ function cardModal(c) {
   $("#qty", s).onchange = (e) => patch({ qty: Math.max(1, +e.target.value || 1) }).then(refreshCard);
   $("#per", s).onchange = (e) => patch({ per_plate: Math.max(1, +e.target.value || 1) }).then(refreshCard);
   if ($("#reprint", s)) $("#reprint", s).onclick = () => { closeModal(true); reprint(c); };
+  s.querySelectorAll("#laneSeg [data-to]").forEach((b) => (b.onclick = () => {
+    if (b.dataset.to === c.lane) return;
+    closeModal(true);
+    moveCard(c, b.dataset.to);
+  }));
   $("#dup", s).onclick = async () => { const n = await api("POST", `/api/cards/${c.id}/duplicate`); BOARD = await api("GET", "/api/board"); cardModal(findCard(n.id)); };
   if (usesParts) wireSteppers(s, async () => {
     const parts = Object.fromEntries(proj.parts.map((x) => [x.id, +$(`#cp-${x.id}`, s).value || 0]));
