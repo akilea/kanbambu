@@ -67,9 +67,7 @@ L'en-tête affiche le total de filament par couleur pour tout ce qui est en Queu
 ### Projet Bambu : une carte par plateau
 
 Dans la fiche du projet (✏️), ajoute le `.3mf` du projet Bambu Studio. kanbambu lit tous ses plateaux et crée
-une carte par plateau, avec le nom du plateau et l'aperçu de Bambu Studio. Les plateaux déjà tranchés passent
-avec leur temps et leurs grammes. Pour avoir les stats de tous les plateaux, fais **Trancher tout**
-puis enregistre le projet avant de l'ajouter.
+une carte par plateau, avec le nom du plateau, ses pièces et l'aperçu de Bambu Studio.
 
 **Temps et filament :** Bambu Studio ne garde pas les résultats du slicing dans un projet enregistré
 (`slice_info.config` est vide), même après *Trancher tout*. Pour les avoir, fais
