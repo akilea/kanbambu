@@ -1,5 +1,7 @@
 /* kanbambu — tiny kanban for 3D prints */
-const LANES = ["park", "analysed", "printing", "done"];
+const LANES = ["analysed", "printing", "done"];   // "analysed" is shown as the Queue
+const LANE_ICON = { analysed: "list-todo", printing: "printer", done: "flag-triangle-right" };
+const LANE_NAME = { analysed: "Queue", printing: "Printing", done: "Done" };
 let BOARD = { projects: [] };
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -72,7 +74,7 @@ const openDone = new Set();      // projects whose Done lane is unfolded
 /* Pieces of the project: produced (green), in the pipeline (blue), still to plan (grey). */
 function inventoryHtml(p) {
   if (!p.parts.length) return "";
-  return `<div class="p-inv" data-act="edit-project" title="Pièces : produites · en cours · à planifier">${p.parts.map((x) => {
+  return `<div class="p-inv" data-act="edit-project" title="Pièces : produites (vert) · en cours (bleu) · +à planifier">${p.parts.map((x) => {
     const tot = Math.max(x.need, x.produced + x.pipeline, 1);
     const w = (n) => `${(100 * Math.min(n, tot)) / tot}%`;
     return `<div class="part ${x.produced >= x.need && x.need ? "complete" : ""}">
@@ -92,7 +94,7 @@ function projectHtml(p) {
   const need = p.parts.reduce((a, x) => a + x.need, 0), made = p.parts.reduce((a, x) => a + Math.min(x.produced, x.need), 0);
   const ok = p.cards.reduce((a, c) => a + c.ok, 0), ko = p.cards.reduce((a, c) => a + c.ko, 0);
   const bomDone = p.bom.filter((b) => b.done).length;
-  const laneIcons = { park: "square-parking", analysed: "scan-search", printing: "printer", done: "flag-triangle-right" };
+  const laneIcons = LANE_ICON;
   return `
   <section class="project ${p.collapsed ? "collapsed" : ""}" data-id="${p.id}">
     <div class="p-head" data-act="toggle">
@@ -114,14 +116,14 @@ function projectHtml(p) {
       </span>
       <button class="ib" data-act="edit-project" title="Modifier">${ic("pencil")}</button>
     </div>
-    ${inventoryHtml(p)}
     <div class="p-body">
+      <div class="p-side">${inventoryHtml(p)}</div>
       ${LANES.map((l) => `
         <div class="lane-wrap">
-          <div class="lane-tag">${ic(laneIcons[l], "sm")} ${l[0].toUpperCase() + l.slice(1)}</div>
+          <div class="lane-tag t-${l}">${ic(laneIcons[l], "sm")} ${LANE_NAME[l]}</div>
           <div class="lane" data-lane="${l}" data-project="${p.id}">${by[l].map((c, i) => cardHtml(c, p, l === "done" && i >= by.done.length - hiddenDone)).join("")}</div>
           ${l === "done" && by.done.length > DONE_SHOWN ? `<button class="add-card" data-act="more-done" title="${hiddenDone ? "Afficher tout" : "Replier"}">${hiddenDone ? `+${hiddenDone}` : ic("chevron-down")}</button>` : ""}
-          ${l === "park" ? `<button class="add-card" data-act="add-card" title="Nouvelle impression (ou glisse des fichiers)">${ic("plus")}</button>` : ""}
+          ${l === "analysed" ? `<button class="add-card" data-act="add-card" title="Nouvelle impression (ou glisse des fichiers)">${ic("plus")}</button>` : ""}
         </div>`).join("")}
     </div>
   </section>`;
@@ -256,20 +258,26 @@ function onCardDrop(e) {
   if (lane === card.lane) return move();
   if (lane === "done") return doneModal(card, (result, note, parts) => move({ result, note, parts }), load);
   if (card.lane === "done") {
+    // Only a failed print is a retry that needs "what changed". After a success (full or partial)
+    // the card simply goes back: next plate, missing pieces, or the same print again.
     const last = card.attempts[card.attempts.length - 1];
-    if (last && last.result === "success" && card.plates_left > 0) return move(); // next plate, not a retry
-    return retryModal(card, (change) => move({ change }), load);
+    if (last && last.result === "fail") return retryModal(card, (change) => move({ change }), load);
+    return move();
   }
   return move();
 }
 
-/* Partial or failed print with a composition: back to Park with only the missing pieces. */
+/* Partial or failed print with a composition: back to the Queue with only the missing pieces.
+   A failure asks what changes; a partial success does not. */
 function relaunch(card) {
-  retryModal(card, (change) => {
-    const lane = $(`.lane[data-lane="park"][data-project="${card.project_id}"]`);
+  const go = (change) => {
+    const lane = $(`.lane[data-lane="analysed"][data-project="${card.project_id}"]`);
     const ids = [...lane.children].map((x) => +x.dataset.id).concat(card.id);
-    api("POST", "/api/cards/move", { card_id: card.id, project_id: card.project_id, lane: "park", ids, change }).then(load);
-  });
+    api("POST", "/api/cards/move", { card_id: card.id, project_id: card.project_id, lane: "analysed", ids, change }).then(load);
+  };
+  const last = card.attempts[card.attempts.length - 1];
+  if (last && last.result === "fail") retryModal(card, go);
+  else go();
 }
 
 /* Next plate of a partially printed card: straight back to Printing. */
@@ -517,7 +525,7 @@ function cardModal(c) {
 
 /* Bambu Studio style totals: filaments, then time per plate. */
 function statsHtml(st) {
-  const laneIcon = { park: "square-parking", analysed: "scan-search", printing: "printer", done: "flag-triangle-right" };
+  const laneIcon = LANE_ICON;
   const m = st.filaments.reduce((a, f) => a + f.m, 0);
   return `
     <div class="sec stats-box">

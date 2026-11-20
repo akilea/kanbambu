@@ -4,7 +4,7 @@ Petit kanban auto-hébergé pour les impressions 3D. Une carte = une impression 
 Aucune connexion au cloud Bambu Lab ni à l'imprimante.
 
 ```
-Park → Analysed → Printing → Done (✓ / ✗)
+Queue → Printing → Done (✓ / ✗), avec les pièces du projet à gauche
 ```
 
 ## Lancer
@@ -31,25 +31,25 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 | Image, lien, fichier Bambu, BOM du projet | ✏️ sur la ligne du projet |
 | Réordonner les projets | glisser la poignée ⋮⋮ |
 | Plier / déplier | clic sur l'en-tête du projet |
-| Nouvelle carte | ➕ sous Park, **ou glisser des STL/3MF sur la colonne** (une carte par fichier) |
+| Nouvelle carte | ➕ sous Queue, **ou glisser des STL/3MF sur la colonne** (une carte par fichier) |
 | Ajouter un fichier à une carte | glisser le fichier sur la carte, ou dans sa fiche |
 | Déplacer | glisser la carte entre les colonnes |
 
-### Analysed, automatiquement
+### Slicing, automatiquement
 
 Dans Bambu Studio, tranche la plaque puis **File → Export → Export plate sliced file** (`.gcode.3mf`).
 Glisse ce fichier sur la carte : kanbambu lit le temps, le poids et les grammes par couleur, prend la
-miniature comme aperçu, et passe la carte de Park à Analysed.
+miniature comme aperçu.
 
 Un `.3mf` de projet normal ne contient pas les grammes. Il donne seulement la miniature.
 
-L'en-tête affiche le total de filament par couleur pour tout ce qui est en Analysed et Printing (plateaux restants).
+L'en-tête affiche le total de filament par couleur pour tout ce qui est en Queue et Printing (plateaux restants).
 
 ### Projet Bambu : une carte par plateau
 
 Dans la fiche du projet (✏️), ajoute le `.3mf` du projet Bambu Studio. kanbambu lit tous ses plateaux et crée
 une carte par plateau, avec le nom du plateau et l'aperçu de Bambu Studio. Les plateaux déjà tranchés passent
-en Analysed avec leur temps et leurs grammes. Pour avoir les stats de tous les plateaux, fais **Trancher tout**
+avec leur temps et leurs grammes. Pour avoir les stats de tous les plateaux, fais **Trancher tout**
 puis enregistre le projet avant de l'ajouter.
 
 La fiche du projet montre alors les totaux, comme le panneau « All Plates Stats » de Bambu Studio : filament
@@ -78,7 +78,7 @@ D'où viennent les pièces :
 - Sinon, les boutons − / + dans la fiche de la carte.
 
 À l'arrivée dans **Done**, ✓ propose un compteur par pièce : « 2 Bras sur 3 » = réussite partielle (bordure
-pointillée orange). Seules les pièces réussies comptent. Le bouton ↻ renvoie la carte dans Park avec **seulement les
+pointillée orange). Seules les pièces réussies comptent. Le bouton ↻ renvoie la carte dans Queue avec **seulement les
 pièces manquantes**, en demandant ce qui change. ⧉ (fiche de la carte) duplique une impression pour la refaire.
 
 Done garde les 3 cartes les plus récentes par projet ; `+N` affiche les autres.
@@ -99,7 +99,8 @@ Une carte = un plateau tranché (`Export plate sliced file`).
 ### Done et réessais
 
 - Entrer dans **Done** demande ✓ (amélioration possible, optionnelle) ou ✗ (raison obligatoire).
-- Ressortir une carte de Done = réessai : il faut dire **ce qui change**. Ce texte est attaché à la tentative suivante.
+- Ressortir de Done une carte **en échec** = réessai : il faut dire **ce qui change**. Ce texte est attaché à la
+  tentative suivante. Après une réussite (complète ou partielle), la carte repart sans question.
 - Les compteurs ✓ / ✗ s'affichent sur la carte et sur le projet. L'historique est dans la fiche de la carte.
 
 ### Ouvrir dans Bambu Studio

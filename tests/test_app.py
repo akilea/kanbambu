@@ -133,14 +133,14 @@ def test_flow():
     c = TestClient(app)
     p = c.post("/api/projects", json={"name": "Lampe"}).json()
     card = c.post("/api/cards", json={"project_id": p["id"], "title": "Base"}).json()
-    assert card["lane"] == "park"
+    assert card["lane"] == "analysed"
 
-    # plain project 3MF: thumbnail only, stays in Park
+    # plain project 3MF: thumbnail only, no slicing data
     r = c.post("/api/upload", data={"card_id": card["id"], "role": "attach"},
                files={"file": ("base.3mf", make_3mf(False))})
     assert r.status_code == 200
     card = next(k for k in c.get("/api/board").json()["projects"][0]["cards"])
-    assert card["lane"] == "park" and card["preview"] and card["analysis"] is None
+    assert card["lane"] == "analysed" and card["preview"] and card["analysis"] is None
     assert [f["name"] for f in card["files"]] == ["base.3mf"]
 
     # sliced plate: analysis + auto move to Analysed
@@ -190,7 +190,7 @@ def test_project_plates(tmp_path):
     assert cards[1]["title"] == "Cadre" and cards[1]["lane"] == "analysed" and cards[1]["preview"]
     assert cards[2]["title"] == "Plateau 2" and cards[2]["plates"] == 1
     assert {x["name"]: x["qty"] for x in cards[2]["parts"]} == {"a": 1, "b": 1}
-    assert cards[3]["lane"] == "park"
+    assert cards[3]["lane"] == "analysed" and cards[3]["analysis"] is None
     st = pr["stats"]
     assert st["time_s"] == 19200 + 6780 and st["g"] == 420 and st["cost"] == 9.0
     assert {f["profile"]: f["g"] for f in st["filaments"]} == {"Bambu PLA Basic": 360, "Bambu PETG HF": 60}
@@ -261,7 +261,7 @@ def test_parts_inventory():
     assert inv() == {"Base": (2, 0, 1, 1), "Bras": (4, 0, 2, 2), "Clip": (2, 0, 1, 1)}
     cards = {k["plate_index"]: k for k in get()["cards"]}
     assert {x["name"]: x["qty"] for x in cards[2]["parts"]} == {"Bras": 2, "Clip": 1}
-    assert cards[1]["lane"] == "analysed" and cards[2]["lane"] == "park"
+    assert cards[1]["lane"] == "analysed" and cards[2]["lane"] == "analysed"
 
     # second copy of plate 1
     dup = c.post(f"/api/cards/{cards[1]['id']}/duplicate").json()

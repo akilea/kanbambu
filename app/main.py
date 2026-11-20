@@ -14,7 +14,8 @@ from pydantic import BaseModel
 from . import db
 from .threemf import merge, parse_3mf, part_name
 
-LANES = ("park", "analysed", "printing", "done")
+# "analysed" is shown as the Queue: everything waiting to be printed, sliced or not.
+LANES = ("analysed", "printing", "done")
 STATIC = os.path.join(os.path.dirname(__file__), "..", "static")
 
 app = FastAPI(title="kanbambu")
@@ -300,9 +301,9 @@ def create_card(body: CardIn):
     if not body.project_id:
         raise HTTPException(400, "project_id")
     with db.conn() as c:
-        pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM cards WHERE project_id=? AND lane='park'",
+        pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM cards WHERE project_id=? AND lane='analysed'",
                         (body.project_id,)).fetchone()[0]
-        cur = c.execute("INSERT INTO cards (project_id, title, url, qty, position) VALUES (?,?,?,?,?)",
+        cur = c.execute("INSERT INTO cards (project_id, title, url, qty, position, lane) VALUES (?,?,?,?,?,'analysed')",
                         (body.project_id, (body.title or "Pièce").strip(), body.url or "", body.qty or 1, pos))
         return card_dict(c, get_card(c, cur.lastrowid))
 
@@ -341,6 +342,8 @@ class Move(BaseModel):
 
 @app.post("/api/cards/move")
 def move_card(body: Move):
+    if body.lane == "park":
+        body.lane = "analysed"
     if body.lane not in LANES:
         raise HTTPException(400, "lane")
     with db.conn() as c:
@@ -401,7 +404,7 @@ def duplicate_card(cid: int):
     """Same print again: new card with the same files, slicing data and composition."""
     with db.conn() as c:
         k = get_card(c, cid)
-        lane = "analysed" if k["analysis"] else "park"
+        lane = "analysed"
         pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM cards WHERE project_id=? AND lane=?",
                         (k["project_id"], lane)).fetchone()[0]
         new = c.execute(
@@ -550,7 +553,7 @@ def import_plates(project_id: int, plates: list):
             card = same[0] if same else None
             if card is None:
                 n = 1 if comp else max(1, pl["objects"] or 1)
-                lane = "analysed" if a else "park"
+                lane = "analysed"
                 pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM cards WHERE project_id=? AND lane=?",
                                 (project_id, lane)).fetchone()[0]
                 cid = c.execute(

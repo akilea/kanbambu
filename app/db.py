@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS cards (
     id INTEGER PRIMARY KEY,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
-    lane TEXT NOT NULL DEFAULT 'park',
+    lane TEXT NOT NULL DEFAULT 'analysed',
     position INTEGER DEFAULT 0,
     qty INTEGER DEFAULT 1,          -- copies wanted
     per_plate INTEGER DEFAULT 1,    -- copies per plate
@@ -85,6 +85,8 @@ def init():
                                 ("attempts", "parts", "TEXT DEFAULT '{}'")):
             if col not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+        # the Park lane was merged into the queue ("analysed")
+        c.execute("UPDATE cards SET lane='analysed' WHERE lane='park'")
 
 
 @contextmanager
