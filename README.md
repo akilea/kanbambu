@@ -16,6 +16,14 @@ docker compose up -d --build
 
 Les données (SQLite + fichiers) vivent dans `./data`. Pour sauvegarder, copie ce dossier.
 
+### Mise à jour automatique (Windows)
+
+`tools\kanbambu-windows.bat` lance kanbambu sans fenêtre et vérifie GitHub toutes les 5 minutes :
+s'il y a du nouveau, il fait `git pull` (et `pip install` si les dépendances ont changé), puis redémarre le
+serveur. Pour qu'il démarre avec Windows : Win+R → `shell:startup` → y mettre un raccourci vers ce fichier.
+Journal : `data/kanbambu.log`. Pour l'arrêter : Gestionnaire des tâches → `pythonw.exe`.
+Ailleurs : `python tools/serve.py`.
+
 Sans Docker :
 
 ```bash
