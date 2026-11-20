@@ -223,3 +223,13 @@ input.num { width: 58px; text-align: center; }
 .li.dim .name { color: var(--mute); }
 .li input.name { flex: 1; min-width: 0; }
 
+
+/* BOM in the side column */
+.p-bom { margin-top: 8px; padding: 6px 8px; background: var(--bg); border-radius: 8px; cursor: pointer; font-size: 12px;
+         display: flex; flex-direction: column; gap: 3px; }
+.p-bom:hover { outline: 1px solid var(--line); }
+.p-bom .sec-h { margin-bottom: 2px; }
+.bom-row { display: flex; align-items: center; gap: 6px; }
+.bom-row b { min-width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
+.bom-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-side > .p-bom:first-child { margin-top: 0; }

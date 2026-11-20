@@ -88,6 +88,9 @@ D'où viennent les pièces :
 pointillée orange). Seules les pièces réussies comptent. Le bouton ↻ renvoie la carte dans Queue avec **seulement les
 pièces manquantes**, en demandant ce qui change. ⧉ (fiche de la carte) duplique une impression pour la refaire.
 
+La **BOM** (vis, aimants…) se saisit par exemplaire : avec ×N exemplaires, la fiche affiche `= total` et la colonne
+de gauche montre la liste déjà multipliée, à cocher au fur et à mesure.
+
 Done garde les 3 cartes les plus récentes par projet ; `+N` affiche les autres.
 
 ### Copies et plateaux (cartes simples)

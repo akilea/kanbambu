@@ -107,6 +107,17 @@ function inventoryHtml(p) {
   }).join("")}</div>`;
 }
 
+/* Hardware to buy or gather, already multiplied by the number of copies of the project. */
+function bomSideHtml(p) {
+  if (!p.bom.length) return "";
+  const sets = p.sets || 1;
+  return `<div class="p-bom" data-act="edit-project" title="BOM${sets > 1 ? ` pour ${sets} exemplaires` : ""}">
+    <div class="sec-h">${ic("list-checks", "sm")} BOM${sets > 1 ? ` <span class="sets">×${sets}</span>` : ""}</div>
+    ${p.bom.map((b) => `<div class="bom-row ${b.done ? "bom-done" : ""}">${ic(b.done ? "square-check" : "square", "sm")}
+      <b>${(b.qty || 1) * sets}</b><span class="name">${esc(b.name)}</span></div>`).join("")}
+  </div>`;
+}
+
 function projectHtml(p) {
   const by = Object.fromEntries(LANES.map((l) => [l, p.cards.filter((c) => c.lane === l)]));
   // Done: most recent first, folded after a few
@@ -138,7 +149,7 @@ function projectHtml(p) {
       <button class="ib" data-act="edit-project" title="Modifier">${ic("pencil")}</button>
     </div>
     <div class="p-body">
-      <div class="p-side">${inventoryHtml(p)}</div>
+      <div class="p-side">${inventoryHtml(p)}${bomSideHtml(p)}</div>
       ${LANES.map((l) => `
         <div class="lane-wrap w-${l}">
           <div class="lane-tag t-${l}">${ic(laneIcons[l], "sm")} ${LANE_NAME[l]}</div>
@@ -674,7 +685,7 @@ function projectModal(p) {
     </div>
     ${p.stats ? statsHtml(p.stats) : ""}
     <div class="sec">
-      <div class="sec-h">${ic("list-checks", "sm")} BOM</div>
+      <div class="sec-h">${ic("list-checks", "sm")} BOM${p.sets > 1 ? ` <span style="text-transform:none">· quantité par exemplaire, ×${p.sets}</span>` : ""}</div>
       <div class="list" id="bom"></div>
       <button class="add-card" id="addBom" title="Ajouter">${ic("plus")}</button>
     </div>
@@ -707,6 +718,7 @@ function projectModal(p) {
       <div class="li ${b.done ? "bom-done" : ""}">
         <button class="ib" data-i="${i}" data-k="done">${ic(b.done ? "square-check" : "square")}</button>
         <input class="num" type="number" min="1" data-i="${i}" data-k="qty" value="${b.qty || 1}">
+        ${p.sets > 1 ? `<span class="sub num-r" style="min-width:36px" title="Total pour ${p.sets} exemplaires">= ${(b.qty || 1) * p.sets}</span>` : ""}
         <input class="name" data-i="${i}" data-k="name" value="${esc(b.name)}" placeholder="Vis M3×8, aimant 6×2…">
         <button class="ib" data-i="${i}" data-k="del">${ic("x", "sm")}</button>
       </div>`).join("");
@@ -714,7 +726,11 @@ function projectModal(p) {
       const i = +el.dataset.i, k = el.dataset.k;
       if (k === "done") el.onclick = () => { bom[i].done = !bom[i].done; saveBom(); drawBom(); };
       else if (k === "del") el.onclick = () => { bom.splice(i, 1); saveBom(); drawBom(); };
-      else el.onchange = () => { bom[i][k] = k === "qty" ? Math.max(1, +el.value || 1) : el.value; saveBom(); };
+      else el.onchange = () => {
+        bom[i][k] = k === "qty" ? Math.max(1, +el.value || 1) : el.value;
+        saveBom();
+        if (k === "qty" && p.sets > 1) drawBom();   // refresh the "= total"
+      };
     });
   };
   drawBom();
