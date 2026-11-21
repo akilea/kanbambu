@@ -79,11 +79,20 @@ function renderTabs() {
   };
 }
 
+const byPos = (a, b) => (a.position ?? 0) - (b.position ?? 0) || a.id - b.id;
+const epicProjects = (e) => BOARD.projects.filter((p) => p.epic_id === e.id).sort(byPos);
+
 function render() {
   const board = $("#board");
-  board.innerHTML = BOARD.projects.map(projectHtml).join("");
+  const epics = BOARD.epics || [];
+  // board order: epics and projects outside any epic share one sequence
+  const top = [
+    ...epics.map((e) => ({ e, position: e.position, id: -e.id })),
+    ...BOARD.projects.filter((p) => !epics.some((e) => e.id === p.epic_id)).map((p) => ({ p, position: p.position, id: p.id })),
+  ].sort(byPos);
+  board.innerHTML = top.map((x) => (x.e ? epicHtml(x.e) : projectHtml(x.p))).join("");
   renderTabs();
-  $("#empty").hidden = BOARD.projects.length > 0;
+  $("#empty").hidden = BOARD.projects.length + (BOARD.epics || []).length > 0;
   renderTotals();
   wire();
 }
@@ -123,10 +132,40 @@ function inventoryHtml(p) {
   }).join("")}</div>`;
 }
 
+/* An epic groups projects (e.g. several Bambu files of one build), with their combined progress. */
+function epicHtml(e) {
+  const ps = epicProjects(e);
+  const sum = (f) => ps.reduce((a, p) => a + (p.stats ? f(p.stats) : 0), 0);
+  const left = sum((s) => s.left_time_s), time = sum((s) => s.time_s), leftG = sum((s) => s.left_g), g = sum((s) => s.g);
+  const need = ps.reduce((a, p) => a + p.parts.reduce((b, x) => b + x.need, 0), 0);
+  const made = ps.reduce((a, p) => a + p.parts.reduce((b, x) => b + Math.min(x.produced, x.need), 0), 0);
+  const ok = ps.reduce((a, p) => a + p.cards.reduce((b, c) => b + c.ok, 0), 0);
+  const img = e.image || (ps.find((p) => p.image) || {}).image;
+  return `
+  <section class="epic ${e.collapsed ? "collapsed" : ""}" data-epic="${e.id}">
+    <div class="e-head" data-eact="toggle" title="Glisse des .3mf ici : un projet par fichier">
+      <span class="e-grip" title="Déplacer">${ic("grip-vertical")}</span>
+      ${ic(e.collapsed ? "chevron-right" : "chevron-down")}
+      ${img ? `<img class="p-img" src="${img}" alt="">` : `<span class="p-img e-ico">${ic("folders")}</span>`}
+      <span class="e-name">${esc(e.name)}</span>
+      ${e.sets > 1 ? `<span class="sets" title="Exemplaires de l'epic">×${e.sets}</span>` : ""}
+      ${e.url ? `<a class="ib" href="${esc(e.url)}" target="_blank" rel="noopener" title="Lien" onclick="event.stopPropagation()">${ic("link")}</a>` : ""}
+      <span class="p-counts" title="Projets">${ic("folders", "sm")} ${ps.length}</span>
+      <span class="p-sp"></span>
+      ${time ? `<span class="p-counts" title="Reste à imprimer / total de l'epic"><span>${ic("clock", "sm")} ${fmtTime(left) || "0m"}<span class="tot">/${fmtTime(time)}</span></span> <span>${ic("weight", "sm")} ${fmtG(leftG)}<span class="tot">/${fmtG(g)}</span></span></span>` : ""}
+      ${need ? `<span class="p-counts ${made >= need ? "ok" : ""}" title="Pièces produites / à produire">${ic("puzzle", "sm")} ${made}/${need}</span>` : ""}
+      ${ok ? `<span class="p-counts ok">${ic("circle-check", "sm")} ${ok}</span>` : ""}
+      <button class="ib" data-eact="add-project" title="Nouveau projet dans cet epic">${ic("plus")}</button>
+      <button class="ib" data-eact="edit" title="Modifier">${ic("pencil")}</button>
+    </div>
+    <div class="e-body">${ps.map(projectHtml).join("") || `<div class="e-empty sub">Glisse des .3mf ici, ou ${ic("plus", "sm")} pour un projet vide.</div>`}</div>
+  </section>`;
+}
+
 /* Hardware to buy or gather, already multiplied by the number of copies of the project. */
 function bomSideHtml(p) {
   if (!p.bom.length) return "";
-  const sets = p.sets || 1;
+  const sets = p.eff_sets || p.sets || 1;
   return `<div class="p-bom" data-act="edit-project" title="BOM${sets > 1 ? ` pour ${sets} exemplaires` : ""}">
     <div class="sec-h">${ic("list-checks", "sm")} BOM${sets > 1 ? ` <span class="sets">×${sets}</span>` : ""}</div>
     ${p.bom.map((b) => `<div class="bom-row ${b.done ? "bom-done" : ""}">${ic(b.done ? "square-check" : "square", "sm")}
@@ -150,7 +189,7 @@ function projectHtml(p) {
       ${ic(p.collapsed ? "chevron-right" : "chevron-down")}
       ${p.image ? `<img class="p-img" src="${p.image}" alt="">` : `<span class="p-img"></span>`}
       <span class="p-name">${esc(p.name)}</span>
-      ${p.sets > 1 ? `<span class="sets" title="Exemplaires du projet">×${p.sets}</span>` : ""}
+      ${p.eff_sets > 1 ? `<span class="sets" title="Exemplaires${p.eff_sets !== p.sets ? ` : ×${p.sets} × epic` : ""}">×${p.eff_sets}</span>` : ""}
       ${p.url ? `<a class="ib" href="${esc(p.url)}" target="_blank" rel="noopener" title="Lien" onclick="event.stopPropagation()">${ic("link")}</a>` : ""}
       ${p.bambu ? bambuBtn(p.bambu) : ""}
       ${p.bom.length ? `<button class="ib" data-act="edit-project" title="BOM">${ic("list-checks")}${bomDone}/${p.bom.length}</button>` : ""}
@@ -225,9 +264,37 @@ const findCard = (id) => BOARD.projects.flatMap((p) => p.cards).find((c) => c.id
 function wire() {
   const board = $("#board");
 
+  // projects move between the board and epics; epics only on the board
+  const saveLayout = () => {
+    const top = [...board.children].filter((x) => x.matches(".epic, .project"))
+      .map((x) => (x.matches(".epic") ? { type: "epic", id: +x.dataset.epic } : { type: "project", id: +x.dataset.id }));
+    const epics = {};
+    board.querySelectorAll(".epic").forEach((x) => {
+      epics[x.dataset.epic] = [...x.querySelector(".e-body").children].filter((y) => y.matches(".project")).map((y) => +y.dataset.id);
+    });
+    return api("POST", "/api/layout", { top, epics }).then(load);
+  };
   Sortable.create(board, {
+    group: { name: "projects" }, handle: ".p-grip, .e-grip", animation: 150, draggable: ".epic, .project",
+    fallbackOnBody: true, swapThreshold: 0.65,
+    delay: 150, delayOnTouchOnly: true, onEnd: saveLayout,
+  });
+  board.querySelectorAll(".e-body").forEach((body) => Sortable.create(body, {
+    group: { name: "projects", put: (to, from, el) => !el.classList.contains("epic") },
     handle: ".p-grip", animation: 150, draggable: ".project", delay: 150, delayOnTouchOnly: true,
-    onEnd: () => api("POST", "/api/projects/order", { ids: [...board.children].map((s) => +s.dataset.id) }),
+    fallbackOnBody: true, swapThreshold: 0.65,
+    onAdd: () => body.querySelector(".e-empty")?.remove(), onEnd: saveLayout,
+  }));
+
+  // drop Bambu files on an epic: one project per file
+  board.querySelectorAll(".e-head").forEach((h) => {
+    h.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); h.classList.add("drop"); } });
+    h.addEventListener("dragleave", () => h.classList.remove("drop"));
+    h.addEventListener("drop", (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); e.stopPropagation(); h.classList.remove("drop");
+      addProjectsFromFiles(+h.closest(".epic").dataset.epic, [...e.dataTransfer.files]);
+    });
   });
 
   board.querySelectorAll(".lane").forEach((lane) => {
@@ -248,6 +315,19 @@ function wire() {
   });
 
   board.onclick = (e) => {
+    const eact = e.target.closest("[data-eact]");
+    const epicEl = e.target.closest(".epic");
+    if (eact && epicEl) {
+      e.stopPropagation();
+      const ep = BOARD.epics.find((x) => x.id === +epicEl.dataset.epic);
+      if (eact.dataset.eact === "edit") return epicModal(ep);
+      if (eact.dataset.eact === "add-project") return newProject(ep.id);
+      if (eact.dataset.eact === "toggle" && !e.target.closest(".e-grip")) {
+        ep.collapsed = !ep.collapsed;
+        api("PATCH", `/api/epics/${ep.id}`, { collapsed: ep.collapsed }).then(render);
+      }
+      return;
+    }
     const act = e.target.closest("[data-act]");
     const proj = e.target.closest(".project");
     if (act && proj) {
@@ -691,6 +771,10 @@ function projectModal(p) {
       <div class="big-img" id="pimg" title="Image">${p.image ? `<img src="${p.image}" style="width:100%;height:100%;object-fit:cover;border-radius:10px">` : ic("image", "lg")}</div>
       <div class="sec" style="flex:1">
         <input class="title" id="name" value="${esc(p.name)}" placeholder="Projet">
+        ${(BOARD.epics || []).length ? `<div class="row">${ic("folders")}<select id="epicSel">
+          <option value="0">— aucun epic —</option>
+          ${BOARD.epics.map((x) => `<option value="${x.id}" ${x.id === p.epic_id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+        </select></div>` : ""}
         <div class="row">${ic("link")}<input id="url" type="url" placeholder="https://" value="${esc(p.url)}"></div>
         <div class="row">${ic("file-box")}
           ${p.bambu ? `<span class="name" style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(p.bambu.name)}</span>
@@ -720,7 +804,7 @@ function projectModal(p) {
     </div>
     ${p.stats ? statsHtml(p.stats) : ""}
     <div class="sec">
-      <div class="sec-h">${ic("list-checks", "sm")} BOM${p.sets > 1 ? ` <span style="text-transform:none">· quantité par exemplaire, ×${p.sets}</span>` : ""}</div>
+      <div class="sec-h">${ic("list-checks", "sm")} BOM${p.eff_sets > 1 ? ` <span style="text-transform:none">· quantité par exemplaire, ×${p.eff_sets}</span>` : ""}</div>
       <div class="list" id="bom"></div>
       <button class="add-card" id="addBom" title="Ajouter">${ic("plus")}</button>
     </div>
@@ -731,6 +815,7 @@ function projectModal(p) {
 
   const patch = (body) => api("PATCH", `/api/projects/${p.id}`, body);
   const reopen = async () => { BOARD = await api("GET", "/api/board"); projectModal(findProject(p.id)); };
+  if ($("#epicSel", s)) $("#epicSel", s).onchange = (ev) => patch({ epic_id: +ev.target.value }).then(reopen);
   wireSteppers(s, async (inp) => {
     if (inp.id === "sets") await patch({ sets: Math.max(1, +inp.value || 1) });
     else if (inp.id.startsWith("per-")) await api("PATCH", `/api/parts/${inp.id.slice(4)}`, { per_set: Math.max(0, +inp.value || 0) });
@@ -753,7 +838,7 @@ function projectModal(p) {
       <div class="li ${b.done ? "bom-done" : ""}">
         <button class="ib" data-i="${i}" data-k="done">${ic(b.done ? "square-check" : "square")}</button>
         <input class="num" type="number" min="1" data-i="${i}" data-k="qty" value="${b.qty || 1}">
-        ${p.sets > 1 ? `<span class="sub num-r" style="min-width:36px" title="Total pour ${p.sets} exemplaires">= ${(b.qty || 1) * p.sets}</span>` : ""}
+        ${p.eff_sets > 1 ? `<span class="sub num-r" style="min-width:36px" title="Total pour ${p.eff_sets} exemplaires">= ${(b.qty || 1) * p.eff_sets}</span>` : ""}
         <input class="name" data-i="${i}" data-k="name" value="${esc(b.name)}" placeholder="Vis M3×8, aimant 6×2…">
         <button class="ib" data-i="${i}" data-k="del">${ic("x", "sm")}</button>
       </div>`).join("");
@@ -764,7 +849,7 @@ function projectModal(p) {
       else el.onchange = () => {
         bom[i][k] = k === "qty" ? Math.max(1, +el.value || 1) : el.value;
         saveBom();
-        if (k === "qty" && p.sets > 1) drawBom();   // refresh the "= total"
+        if (k === "qty" && p.eff_sets > 1) drawBom();   // refresh the "= total"
       };
     });
   };
@@ -814,12 +899,72 @@ drawThemeBtn();
 
 /* ---------------- boot ---------------- */
 
-$("#addProject").onclick = async () => {
-  const p = await api("POST", "/api/projects", { name: "Nouveau projet" });
+async function newProject(epicId) {
+  const p = await api("POST", "/api/projects", { name: "Nouveau projet", epic_id: epicId || undefined });
   await load();
   projectModal(findProject(p.id));
   $("#name").select();
+}
+$("#addProject").onclick = () => newProject();
+
+/* One project per Bambu file: the project .3mf gives plates and parts, a .gcode.3mf gives the slicing too. */
+async function addProjectsFromFiles(epicId, files) {
+  for (const f of files) {
+    if (!/\.3mf$/i.test(f.name)) continue;
+    const name = f.name.replace(/\.gcode\.3mf$|\.3mf$/i, "");
+    const p = await api("POST", "/api/projects", { name, epic_id: epicId || undefined });
+    await uploadFile(f, { project_id: p.id, role: /\.gcode\.3mf$/i.test(f.name) ? "slicing" : "bambu" });
+  }
+  load();
+}
+
+$("#addEpic").onclick = async () => {
+  const e = await api("POST", "/api/epics", { name: "Nouvel epic" });
+  await load();
+  epicModal(BOARD.epics.find((x) => x.id === e.id));
+  $("#ename").select();
 };
+
+function epicModal(e) {
+  const ps = epicProjects(e);
+  const s = openModal(`
+    <div class="row" style="align-items:flex-start">
+      <div class="big-img" id="eimg" title="Image">${e.image ? `<img src="${e.image}" style="width:100%;height:100%;object-fit:cover;border-radius:10px">` : ic("folders", "lg")}</div>
+      <div class="sec" style="flex:1">
+        <input class="title" id="ename" value="${esc(e.name)}" placeholder="Epic">
+        <div class="row">${ic("link")}<input id="eurl" type="url" placeholder="https://" value="${esc(e.url)}"></div>
+        <div class="row" title="Exemplaires de tout l'epic : multiplie les exemplaires de chaque projet">${ic("copy")} ×${stepper("esets", e.sets, 1)}</div>
+      </div>
+    </div>
+    <div class="sec">
+      <div class="sec-h">${ic("folders", "sm")} Projets</div>
+      <div class="list">${ps.map((p) => `
+        <div class="li click" data-open-project="${p.id}">${p.image ? `<img src="${p.image}" style="width:22px;height:22px;border-radius:4px;object-fit:cover">` : ic("folder-open", "sm")}
+          <span class="name">${esc(p.name)}</span>
+          ${p.stats ? `<span class="sub">${fmtTime(p.stats.left_time_s) || "0m"}/${fmtTime(p.stats.time_s)}</span>` : ""}</div>`).join("") || `<div class="sub">Aucun projet.</div>`}</div>
+      <div class="drop-zone" id="efiles" title="Un projet par fichier">${ic("upload")} .3mf → un projet par fichier</div>
+    </div>
+    <div class="foot">
+      <button class="btn danger" id="edel" title="Supprimer l'epic (les projets restent)">${ic("trash-2")}</button>
+      <button class="btn primary" id="eclose" title="Fermer">${ic("circle-check")}</button>
+    </div>`, load);
+  const patch = (body) => api("PATCH", `/api/epics/${e.id}`, body);
+  const reopen = async () => { BOARD = await api("GET", "/api/board"); epicModal(BOARD.epics.find((x) => x.id === e.id)); };
+  $("#ename", s).onchange = (ev) => patch({ name: ev.target.value.trim() || e.name });
+  $("#eurl", s).onchange = (ev) => patch({ url: ev.target.value.trim() });
+  wireSteppers(s, (inp) => patch({ sets: Math.max(1, +inp.value || 1) }).then(reopen));
+  dropZone($("#eimg", s), async (files) => {
+    if (!files[0]) return;
+    const fd = new FormData();
+    fd.append("file", files[0]); fd.append("epic_id", e.id); fd.append("role", "epic_image");
+    await api("POST", "/api/upload", fd);
+    reopen();
+  });
+  dropZone($("#efiles", s), async (files) => { await addProjectsFromFiles(e.id, files); reopen(); });
+  s.querySelectorAll("[data-open-project]").forEach((r) => (r.onclick = () => projectModal(findProject(r.dataset.openProject))));
+  $("#eclose", s).onclick = () => closeModal();
+  armDelete($("#edel", s), async () => { await api("DELETE", `/api/epics/${e.id}`); closeModal(); });
+}
 
 fetch("icons.svg").then((r) => r.text()).then((svg) => {
   document.body.insertAdjacentHTML("afterbegin", svg);

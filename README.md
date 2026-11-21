@@ -64,6 +64,19 @@ le temps à la main (`1h30`, `90m`, `1:30`) ; un `.gcode.3mf` ajouté ensuite le
 
 L'en-tête affiche le total de filament par couleur pour tout ce qui est en Queue et Printing (plateaux restants).
 
+### Epics : un groupe de projets
+
+Quand une construction tient dans plusieurs fichiers Bambu, crée un **epic** (bouton ➕🗂 en haut) : il regroupe
+plusieurs projets, un par `.3mf`.
+
+- **Glisse des `.3mf` sur l'en-tête de l'epic** (ou dans sa fiche) : un projet par fichier, avec ses plateaux,
+  pièces et aperçus. Un `.gcode.3mf` « tous les plateaux » donne aussi les temps et le filament.
+- Pour ranger un projet existant : glisse-le par sa poignée ⋮⋮ dans l'epic (ou au-dessus pour l'en sortir), ou
+  choisis l'epic dans la fiche du projet.
+- L'en-tête de l'epic additionne ses projets : temps et poids restant / total, pièces produites / à produire.
+- **Exemplaires** : ceux de l'epic multiplient ceux de chaque projet (epic ×2, projet ×3 → 6), pièces et BOM comprises.
+- Supprimer un epic garde ses projets.
+
 ### Projet Bambu : une carte par plateau
 
 Dans la fiche du projet (✏️), ajoute le `.3mf` du projet Bambu Studio. kanbambu lit tous ses plateaux et crée

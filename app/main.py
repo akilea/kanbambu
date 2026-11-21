@@ -105,7 +105,7 @@ def card_dict(c, r) -> dict:
     }
 
 
-def project_dict(c, p) -> dict:
+def project_dict(c, p, epic=None) -> dict:
     cards = [card_dict(c, r) for r in c.execute(
         "SELECT * FROM cards WHERE project_id=? ORDER BY position, id", (p["id"],))]
     bambu = c.execute("SELECT * FROM files WHERE id=?", (p["bambu_file_id"],)).fetchone() \
@@ -113,7 +113,11 @@ def project_dict(c, p) -> dict:
     return {
         "id": p["id"], "name": p["name"], "url": p["url"], "collapsed": bool(p["collapsed"]),
         "sets": p["sets"] or 1,
-        "parts": inventory(c, p, cards),
+        "position": p["position"],
+        "epic_id": p["epic_id"],
+        # copies actually needed: the project's own count times its epic's
+        "eff_sets": (p["sets"] or 1) * ((epic["sets"] or 1) if epic else 1),
+        "parts": inventory(c, p, cards, (epic["sets"] or 1) if epic else 1),
         "image": f"/files/{p['image_file_id']}/image" if p["image_file_id"] else None,
         "bambu": file_row(bambu) if bambu else None,
         "bom": json.loads(p["bom"] or "[]"),
@@ -122,9 +126,9 @@ def project_dict(c, p) -> dict:
     }
 
 
-def inventory(c, p, cards: list) -> list:
+def inventory(c, p, cards: list, epic_sets: int = 1) -> list:
     """Per part: needed, produced (successful pieces), in the pipeline (cards not done), still to plan."""
-    sets = p["sets"] or 1
+    sets = (p["sets"] or 1) * epic_sets
     produced: dict = {}
     pipeline: dict = {}
     for k in cards:
@@ -222,8 +226,98 @@ def project_stats(cards: list) -> Optional[dict]:
 @app.get("/api/board")
 def board():
     with db.conn() as c:
-        return {"projects": [project_dict(c, p) for p in c.execute(
-            "SELECT * FROM projects ORDER BY position, id")]}
+        epics = {e["id"]: e for e in c.execute("SELECT * FROM epics ORDER BY position, id")}
+        return {
+            "epics": [epic_dict(e) for e in epics.values()],
+            "projects": [project_dict(c, p, epics.get(p["epic_id"])) for p in c.execute(
+                "SELECT * FROM projects ORDER BY position, id")],
+        }
+
+
+def epic_dict(e) -> dict:
+    return {"id": e["id"], "name": e["name"], "url": e["url"], "sets": e["sets"] or 1,
+            "position": e["position"], "collapsed": bool(e["collapsed"]),
+            "image": f"/files/{e['image_file_id']}/image" if e["image_file_id"] else None}
+
+
+# ---------- epics: a group of projects (e.g. several Bambu files of one build) ----------
+
+class EpicIn(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    sets: Optional[int] = None
+    collapsed: Optional[bool] = None
+
+
+@app.post("/api/epics")
+def create_epic(body: EpicIn):
+    with db.conn() as c:
+        pos = c.execute("SELECT MIN(m) - 1 FROM (SELECT COALESCE(MIN(position), 0) m FROM projects "
+                        "WHERE epic_id IS NULL UNION ALL SELECT COALESCE(MIN(position), 0) FROM epics)").fetchone()[0]
+        eid = c.execute("INSERT INTO epics (name, url, position) VALUES (?,?,?)",
+                        ((body.name or "Epic").strip(), body.url or "", pos)).lastrowid
+        return epic_dict(c.execute("SELECT * FROM epics WHERE id=?", (eid,)).fetchone())
+
+
+@app.patch("/api/epics/{eid}")
+def update_epic(eid: int, body: EpicIn):
+    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "collapsed" in fields:
+        fields["collapsed"] = int(fields["collapsed"])
+    if "sets" in fields:
+        fields["sets"] = max(1, fields["sets"])
+    with db.conn() as c:
+        if "epic_id" in fields:
+            eid = fields["epic_id"] or None
+            fields["epic_id"] = eid
+            fields["position"] = c.execute(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM projects WHERE epic_id=?", (eid,)).fetchone()[0] \
+                if eid else c.execute("SELECT MIN(m) - 1 FROM (SELECT COALESCE(MIN(position), 0) m FROM projects "
+                                      "WHERE epic_id IS NULL UNION ALL SELECT COALESCE(MIN(position), 0) FROM epics)").fetchone()[0]
+        if fields:
+            c.execute(f"UPDATE epics SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?", (*fields.values(), eid))
+        e = c.execute("SELECT * FROM epics WHERE id=?", (eid,)).fetchone()
+        if not e:
+            raise HTTPException(404)
+        return epic_dict(e)
+
+
+@app.delete("/api/epics/{eid}")
+def delete_epic(eid: int):
+    """Removes the group only: its projects stay, in its place."""
+    with db.conn() as c:
+        e = c.execute("SELECT * FROM epics WHERE id=?", (eid,)).fetchone()
+        if not e:
+            raise HTTPException(404)
+        c.execute("UPDATE projects SET epic_id=NULL, position=? WHERE epic_id=?", (e["position"], eid))
+        if e["image_file_id"]:
+            delete_file_row(c, e["image_file_id"])
+        c.execute("DELETE FROM epics WHERE id=?", (eid,))
+    return {"ok": True}
+
+
+class LayoutItem(BaseModel):
+    type: str          # "epic" | "project"
+    id: int
+
+
+class Layout(BaseModel):
+    top: List[LayoutItem]                # board order: epics and projects outside any epic
+    epics: Dict[int, List[int]] = {}     # epic id -> its projects, in order
+
+
+@app.post("/api/layout")
+def save_layout(body: Layout):
+    with db.conn() as c:
+        for i, it in enumerate(body.top):
+            if it.type == "epic":
+                c.execute("UPDATE epics SET position=? WHERE id=?", (i, it.id))
+            else:
+                c.execute("UPDATE projects SET position=?, epic_id=NULL WHERE id=?", (i, it.id))
+        for eid, pids in body.epics.items():
+            for i, pid in enumerate(pids):
+                c.execute("UPDATE projects SET position=?, epic_id=? WHERE id=?", (i, eid, pid))
+    return {"ok": True}
 
 
 # ---------- projects ----------
@@ -234,14 +328,20 @@ class ProjectIn(BaseModel):
     bom: Optional[list] = None
     collapsed: Optional[bool] = None
     sets: Optional[int] = None
+    epic_id: Optional[int] = None      # 0 = take it out of its epic
 
 
 @app.post("/api/projects")
 def create_project(body: ProjectIn):
     with db.conn() as c:
-        pos = c.execute("SELECT COALESCE(MIN(position), 0) - 1 FROM projects").fetchone()[0]
-        cur = c.execute("INSERT INTO projects (name, url, position) VALUES (?,?,?)",
-                        ((body.name or "Projet").strip(), body.url or "", pos))
+        eid = body.epic_id or None
+        if eid:  # last in its epic
+            pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM projects WHERE epic_id=?", (eid,)).fetchone()[0]
+        else:    # first on the board
+            pos = c.execute("SELECT MIN(m) - 1 FROM (SELECT COALESCE(MIN(position), 0) m FROM projects "
+                            "WHERE epic_id IS NULL UNION ALL SELECT COALESCE(MIN(position), 0) FROM epics)").fetchone()[0]
+        cur = c.execute("INSERT INTO projects (name, url, position, epic_id) VALUES (?,?,?,?)",
+                        ((body.name or "Projet").strip(), body.url or "", pos, eid))
         return project_dict(c, c.execute("SELECT * FROM projects WHERE id=?", (cur.lastrowid,)).fetchone())
 
 
@@ -255,6 +355,13 @@ def update_project(pid: int, body: ProjectIn):
     if "sets" in fields:
         fields["sets"] = max(1, fields["sets"])
     with db.conn() as c:
+        if "epic_id" in fields:
+            eid = fields["epic_id"] or None
+            fields["epic_id"] = eid
+            fields["position"] = c.execute(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM projects WHERE epic_id=?", (eid,)).fetchone()[0] \
+                if eid else c.execute("SELECT MIN(m) - 1 FROM (SELECT COALESCE(MIN(position), 0) m FROM projects "
+                                      "WHERE epic_id IS NULL UNION ALL SELECT COALESCE(MIN(position), 0) FROM epics)").fetchone()[0]
         if fields:
             sets = ", ".join(f"{k}=?" for k in fields)
             c.execute(f"UPDATE projects SET {sets} WHERE id=?", (*fields.values(), pid))
@@ -478,7 +585,8 @@ def delete_attempt(aid: int):
 
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...), project_id: Optional[int] = Form(None),
-                 card_id: Optional[int] = Form(None), role: str = Form("attach")):
+                 card_id: Optional[int] = Form(None), role: str = Form("attach"),
+                 epic_id: Optional[int] = Form(None)):
     """role: attach (card file), preview (card image), image (project image), bambu (project file),
     slicing (a .gcode.3mf of all plates: fills time/filament of the project's plate cards, not kept)."""
     data = await file.read()
@@ -488,7 +596,12 @@ async def upload(file: UploadFile = File(...), project_id: Optional[int] = Form(
     fid = store_bytes(data, name, project_id if role in ("image", "bambu") else None,
                       card_id if role in ("attach", "preview") else None)
     with db.conn() as c:
-        if role == "image" and project_id:
+        if role == "epic_image" and epic_id:
+            old = c.execute("SELECT image_file_id FROM epics WHERE id=?", (epic_id,)).fetchone()
+            c.execute("UPDATE epics SET image_file_id=? WHERE id=?", (fid, epic_id))
+            if old and old[0]:
+                delete_file_row(c, old[0])
+        elif role == "image" and project_id:
             old = c.execute("SELECT image_file_id FROM projects WHERE id=?", (project_id,)).fetchone()
             c.execute("UPDATE projects SET image_file_id=? WHERE id=?", (fid, project_id))
             if old and old[0]:

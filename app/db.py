@@ -46,6 +46,16 @@ CREATE TABLE IF NOT EXISTS files (
     size INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS epics (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    url TEXT DEFAULT '',
+    image_file_id INTEGER,
+    sets INTEGER DEFAULT 1,         -- copies of the whole epic (multiplies its projects' copies)
+    position INTEGER DEFAULT 0,     -- shares the top-level order with projects outside any epic
+    collapsed INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS parts (
     id INTEGER PRIMARY KEY,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -82,7 +92,8 @@ def init():
         for table, col, ddl in (("cards", "per_plate", "INTEGER DEFAULT 1"),
                                 ("cards", "plate_index", "INTEGER"),
                                 ("projects", "sets", "INTEGER DEFAULT 1"),
-                                ("attempts", "parts", "TEXT DEFAULT '{}'")):
+                                ("attempts", "parts", "TEXT DEFAULT '{}'"),
+                                ("projects", "epic_id", "INTEGER")):
             if col not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
         # the Park lane was merged into the queue ("analysed")

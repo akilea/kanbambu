@@ -389,3 +389,42 @@ def test_requeued_plate_counts_as_remaining():
     assert pr()["stats"]["left_g"] == 50
     assert pr()["stats"]["g"] == 100               # grand total: printed once + once more to do
     c.delete(f"/api/projects/{pid}")
+
+
+def test_epics():
+    c = TestClient(app)
+    board = lambda: c.get("/api/board").json()  # noqa: E731
+    e = c.post("/api/epics", json={"name": "Station AMS"}).json()
+    p1 = c.post("/api/projects", json={"name": "Stacker", "epic_id": e["id"]}).json()
+    p2 = c.post("/api/projects", json={"name": "Holder", "epic_id": e["id"]}).json()
+    loose = c.post("/api/projects", json={"name": "Seul"}).json()
+    b = board()
+    assert [x["id"] for x in b["epics"]] == [e["id"]]
+    proj = {p["id"]: p for p in b["projects"]}
+    assert proj[p1["id"]]["epic_id"] == e["id"] and proj[loose["id"]]["epic_id"] is None
+
+    # copies multiply: epic x2, project x3 -> 6 of each part
+    c.post("/api/upload", data={"project_id": p1["id"], "role": "bambu"},
+           files={"file": ("s.3mf", _zip(model_settings=AMS_SETTINGS, slice_info=AMS_SLICE))})
+    c.patch(f"/api/projects/{p1['id']}", json={"sets": 3})
+    c.patch(f"/api/epics/{e['id']}", json={"sets": 2})
+    p = next(x for x in board()["projects"] if x["id"] == p1["id"])
+    assert p["eff_sets"] == 6 and {x["name"]: x["need"] for x in p["parts"]}["Bras"] == 12
+
+    # layout: move the loose project into the epic, first
+    r = c.post("/api/layout", json={"top": [{"type": "epic", "id": e["id"]}],
+                                    "epics": {str(e["id"]): [loose["id"], p1["id"], p2["id"]]}})
+    assert r.status_code == 200
+    ps = sorted((x for x in board()["projects"] if x["epic_id"] == e["id"]), key=lambda x: x["id"])
+    assert len(ps) == 3
+    # take it out again via the project sheet
+    c.patch(f"/api/projects/{loose['id']}", json={"epic_id": 0})
+    assert next(x for x in board()["projects"] if x["id"] == loose["id"])["epic_id"] is None
+
+    # deleting the epic keeps its projects
+    c.delete(f"/api/epics/{e['id']}")
+    b = board()
+    assert b["epics"] == [] and {p1["id"], p2["id"]} <= {x["id"] for x in b["projects"]}
+    assert all(x["epic_id"] is None for x in b["projects"])
+    for x in (p1, p2, loose):
+        c.delete(f"/api/projects/{x['id']}")
