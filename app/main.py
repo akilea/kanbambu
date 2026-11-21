@@ -3,7 +3,9 @@ import math
 import os
 import re
 import shutil
+import sys
 import uuid
+from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -13,14 +15,36 @@ from pydantic import BaseModel
 
 from . import db
 from . import folders as fld
+from . import watcher
 from .threemf import merge, parse_3mf, part_name
 
 # "analysed" is shown as the Queue: everything waiting to be printed, sliced or not.
 LANES = ("analysed", "printing", "done")
 STATIC = os.path.join(os.path.dirname(__file__), "..", "static")
 
-app = FastAPI(title="kanbambu")
+@asynccontextmanager
+async def lifespan(_app):
+    if os.environ.get("KANBAMBU_WATCH", "1") != "0":
+        watcher.start(sys.modules[__name__])   # watch the epic and project folders
+    yield
+
+
+app = FastAPI(title="kanbambu", lifespan=lifespan)
 db.init()
+
+# Changes counter: open pages poll it and reload the board when something changed elsewhere
+# (another device, or a file picked up from a folder).
+VERSION = {"v": 0}
+
+
+def bump():
+    VERSION["v"] += 1
+
+
+@app.get("/api/version")
+def version(since: int = 0):
+    """Change counter, plus what the folder watcher did since event `since`."""
+    return {"v": VERSION["v"], "events": [e for e in watcher.events if e["id"] > since]}
 
 
 @app.middleware("http")
@@ -28,6 +52,8 @@ async def no_stale_ui(request, call_next):
     """The page, scripts and styles are revalidated on every load, so an update shows up
     right away instead of the browser keeping an old copy."""
     response = await call_next(request)
+    if request.method != "GET" and request.url.path.startswith("/api/"):
+        bump()
     if not request.url.path.startswith("/files/"):
         response.headers["Cache-Control"] = "no-cache"
     return response
@@ -617,13 +643,15 @@ async def upload(file: UploadFile = File(...), project_id: Optional[int] = Form(
 
 class SettingsIn(BaseModel):
     models_root: Optional[str] = None
+    watch: Optional[bool] = None
 
 
 @app.get("/api/settings")
 def get_settings():
     with db.conn() as c:
         return {"models_root": fld.get_setting(c, "models_root") or fld.DEFAULT_ROOT,
-                "models_root_path": fld.models_root(c)}
+                "models_root_path": fld.models_root(c),
+                "watch": fld.get_setting(c, "watch", "1") != "0"}
 
 
 @app.put("/api/settings")
@@ -631,6 +659,8 @@ def put_settings(body: SettingsIn):
     with db.conn() as c:
         if body.models_root is not None:
             fld.set_setting(c, "models_root", body.models_root.strip())
+        if body.watch is not None:
+            fld.set_setting(c, "watch", "1" if body.watch else "0")
     return get_settings()
 
 

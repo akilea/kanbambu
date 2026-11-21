@@ -165,14 +165,16 @@ function epicHtml(e) {
   const need = ps.reduce((a, p) => a + p.parts.reduce((b, x) => b + x.need, 0), 0);
   const made = ps.reduce((a, p) => a + p.parts.reduce((b, x) => b + Math.min(x.produced, x.need), 0), 0);
   const ok = ps.reduce((a, p) => a + p.cards.reduce((b, c) => b + c.ok, 0), 0);
+  const printing = ps.reduce((a, p) => a + p.cards.filter((c) => c.lane === "printing").length, 0);
   const img = e.image || (ps.find((p) => p.image) || {}).image;
   return `
-  <section class="epic ${e.collapsed ? "collapsed" : ""}" data-epic="${e.id}">
+  <section class="epic ${e.collapsed ? "collapsed" : ""} ${printing ? "is-printing" : ""}" data-epic="${e.id}">
     <div class="e-head" data-eact="toggle" title="Glisse des .3mf ici : un projet par fichier">
       <span class="e-grip" title="Déplacer">${ic("grip-vertical")}</span>
       ${ic(e.collapsed ? "chevron-right" : "chevron-down")}
       ${img ? `<img class="p-img" src="${img}" alt="">` : `<span class="p-img e-ico">${ic("folders")}</span>`}
       <span class="e-name">${esc(e.name)}</span>
+      ${printing ? `<span class="now-printing" title="${printing} plateau(x) en impression">${ic("printer", "sm")}${printing > 1 ? printing : ""}</span>` : ""}
       ${e.sets > 1 ? `<span class="sets" title="Exemplaires de l'epic">×${e.sets}</span>` : ""}
       ${e.url ? `<a class="ib" href="${esc(e.url)}" target="_blank" rel="noopener" title="Lien" onclick="event.stopPropagation()">${ic("link")}</a>` : ""}
       <span class="p-counts" title="Projets">${ic("folders", "sm")} ${ps.length}</span>
@@ -205,15 +207,17 @@ function projectHtml(p) {
   const hiddenDone = openDone.has(p.id) ? 0 : Math.max(0, by.done.length - DONE_SHOWN);
   const need = p.parts.reduce((a, x) => a + x.need, 0), made = p.parts.reduce((a, x) => a + Math.min(x.produced, x.need), 0);
   const ok = p.cards.reduce((a, c) => a + c.ok, 0), ko = p.cards.reduce((a, c) => a + c.ko, 0);
+  const printing = p.cards.filter((c) => c.lane === "printing").length;
   const bomDone = p.bom.filter((b) => b.done).length;
   const laneIcons = LANE_ICON;
   return `
-  <section class="project ${p.collapsed ? "collapsed" : ""}" data-id="${p.id}">
+  <section class="project ${p.collapsed ? "collapsed" : ""} ${printing ? "is-printing" : ""}" data-id="${p.id}">
     <div class="p-head" data-act="toggle">
       <span class="p-grip" title="Déplacer">${ic("grip-vertical")}</span>
       ${ic(p.collapsed ? "chevron-right" : "chevron-down")}
       ${p.image ? `<img class="p-img" src="${p.image}" alt="">` : `<span class="p-img"></span>`}
       <span class="p-name">${esc(p.name)}</span>
+      ${printing ? `<span class="now-printing" title="${printing} plateau(x) en impression">${ic("printer", "sm")}${printing > 1 ? printing : ""}</span>` : ""}
       ${p.eff_sets > 1 ? `<span class="sets" title="Exemplaires${p.eff_sets !== p.sets ? ` : ×${p.sets} × epic` : ""}">×${p.eff_sets}</span>` : ""}
       ${p.url ? `<a class="ib" href="${esc(p.url)}" target="_blank" rel="noopener" title="Lien" onclick="event.stopPropagation()">${ic("link")}</a>` : ""}
       ${p.bambu ? bambuBtn(p.bambu) : ""}
@@ -805,12 +809,40 @@ async function settingsModal() {
       <input id="root" value="${esc(st.models_root)}">
       <div class="sub">Sur le PC qui fait tourner kanbambu : ${esc(st.models_root_path)}<br>
         Par défaut, chaque epic a un sous-dossier à son nom, et chaque projet un sous-dossier dans celui de son epic.</div>
+      <label class="row" style="margin-top:6px"><input type="checkbox" id="watch" ${st.watch ? "checked" : ""}>
+        ${ic("refresh-cw", "sm")} Surveiller les dossiers et ajouter ce qui y est enregistré</label>
     </div>
     <div class="foot"><span></span><button class="btn primary" id="sclose">${ic("circle-check")}</button></div>`, load);
   $("#root", s).onchange = async (ev) => { await api("PUT", "/api/settings", { models_root: ev.target.value }); closeModal(true); settingsModal(); };
+  $("#watch", s).onchange = (ev) => api("PUT", "/api/settings", { watch: ev.target.checked });
   $("#sclose", s).onclick = () => closeModal();
 }
 $("#settings").onclick = settingsModal;
+
+/* Live: reload when the board changed elsewhere (another device, a file saved in a folder),
+   and say what the folder watcher did. Never while a sheet is open or a card is being dragged. */
+let LIVE = { v: null, ev: 0 };
+function toast(msg) {
+  let box = $("#toasts");
+  if (!box) { box = document.createElement("div"); box.id = "toasts"; document.body.appendChild(box); }
+  const t = document.createElement("div");
+  t.className = "toast";
+  t.textContent = msg;
+  box.appendChild(t);
+  setTimeout(() => t.classList.add("out"), 5000);
+  setTimeout(() => t.remove(), 5600);
+}
+async function poll() {
+  try {
+    const r = await api("GET", `/api/version?since=${LIVE.ev}`);
+    for (const e of r.events) { if (LIVE.v !== null) toast(e.msg); LIVE.ev = Math.max(LIVE.ev, e.id); }
+    const busy = !$("#modal").hidden || document.querySelector(".sortable-chosen, .new-title");
+    if (LIVE.v !== null && r.v !== LIVE.v && !busy) { LIVE.v = r.v; return load(); }
+    if (!busy) LIVE.v = r.v;
+  } catch (e) { /* server restarting: try again later */ }
+}
+setInterval(() => { if (!document.hidden) poll(); }, 5000);
+poll();
 
 /* Bambu Studio style totals: filaments, then time per plate. */
 function statsHtml(st) {

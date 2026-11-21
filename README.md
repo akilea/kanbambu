@@ -97,6 +97,25 @@ modèles (⚙ Réglages, `~/Documents/3DModel` = `C:\Users\<toi>\Documents\3DMod
 - Quand un fichier importé du dossier est enregistré à nouveau dans Bambu Studio, le projet affiche ↻ : un clic
   le relit (plateaux, temps, filament), sans rien re-glisser.
 
+### Surveillance des dossiers
+
+kanbambu surveille les dossiers des epics et des projets (toutes les ~4 s) et ajoute ce que tu y enregistres,
+une fois le fichier fini d'écrire. Les fichiers déjà présents la première fois qu'un dossier est vu sont
+seulement notés. Une petite notification dit ce qui a été fait, et les pages ouvertes se mettent à jour seules.
+
+| Enregistré dans… | Effet |
+| --- | --- |
+| le dossier d'un epic : un nouveau `.3mf` | nouveau projet dans l'epic |
+| le dossier d'un projet : un `.3mf`, si le projet n'en a pas | devient son fichier Bambu (plateaux, pièces) |
+| le fichier Bambu ou l'export du projet, ré-enregistré | relu |
+| un `.gcode.3mf` de plusieurs plateaux (*Export all plate sliced file*) | temps et filament des cartes de plateau |
+| un `.gcode.3mf` d'un plateau, un STL, STEP… | joint à la carte du même nom (fichier ou titre), sinon nouvelle carte |
+
+Dans un dossier partagé par plusieurs projets (les `.3mf` d'un epic côte à côte), un fichier va au projet dont il
+porte le nom : `stacker.gcode.3mf` pour `stacker.3mf`. À désactiver dans ⚙ Réglages au besoin.
+
+Un projet ou un epic qui a un plateau en impression est légèrement teinté avec une 🖨️ dans son en-tête.
+
 ### Projet Bambu : une carte par plateau
 
 Dans la fiche du projet (✏️), ajoute le `.3mf` du projet Bambu Studio. kanbambu lit tous ses plateaux et crée

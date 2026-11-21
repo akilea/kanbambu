@@ -46,6 +46,19 @@ CREATE TABLE IF NOT EXISTS files (
     size INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS folder_seen (      -- folders already scanned once, per project/epic
+    scope TEXT NOT NULL,
+    path TEXT NOT NULL,
+    PRIMARY KEY (scope, path)
+);
+CREATE TABLE IF NOT EXISTS folder_files (     -- files seen in them, to notice new saves
+    scope TEXT NOT NULL,
+    path TEXT NOT NULL,
+    mtime REAL,
+    size INTEGER,
+    card_id INTEGER,
+    PRIMARY KEY (scope, path)
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT

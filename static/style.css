@@ -257,3 +257,18 @@ select { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; ba
 .ib.changed { color: var(--printing); }
 #fpath { flex: 1; min-width: 0; font-size: 12px; }
 #flist .li { padding: 2px 6px; }
+
+/* something is printing in this project / epic */
+.now-printing { display: inline-flex; align-items: center; gap: 2px; color: var(--printing); font-size: 12px; font-weight: 600;
+                animation: pulse 2.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+.project.is-printing { box-shadow: inset 3px 0 0 var(--printing), var(--shadow); }
+.project.is-printing > .p-head { background: color-mix(in srgb, var(--printing) 7%, transparent); border-radius: var(--r) var(--r) 0 0; }
+.project.is-printing.collapsed > .p-head { border-radius: var(--r); }
+.epic.is-printing > .e-head { background: color-mix(in srgb, var(--printing) 8%, transparent); }
+
+/* toasts from the folder watcher */
+#toasts { position: fixed; right: 14px; bottom: 14px; z-index: 30; display: flex; flex-direction: column; gap: 6px; max-width: min(420px, 90vw); }
+.toast { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-left: 3px solid var(--analysed);
+         border-radius: 8px; padding: 8px 12px; box-shadow: 0 6px 18px rgba(0,0,0,.18); font-size: 13px; transition: opacity .5s; }
+.toast.out { opacity: 0; }

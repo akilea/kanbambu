@@ -481,3 +481,63 @@ def test_card_from_folder_stl(tmp_path):
     assert k["title"] == "petite boite" and k["files"][0]["kind"] == "stl"
     assert c.post(f"/api/projects/{pid}/card-from-file", json={"name": "../x.stl"}).status_code == 404
     c.delete(f"/api/projects/{pid}")
+
+
+def test_folder_watcher(tmp_path):
+    import os as _os
+    import time as _t
+    import app.main as m
+    from app import watcher
+
+    c = TestClient(app)
+    c.put("/api/settings", json={"models_root": str(tmp_path)})
+    scan = lambda: watcher.scan_once(m, stable_wait=False)  # noqa: E731
+    board = lambda: c.get("/api/board").json()  # noqa: E731
+    proj = lambda name: next(p for p in board()["projects"] if p["name"] == name)  # noqa: E731
+    touch = lambda path: _os.utime(path, (_t.time() + 5, _t.time() + 5))  # noqa: E731
+
+    # epic folder: present files are only recorded, new .3mf become projects
+    e = c.post("/api/epics", json={"name": "Station"}).json()
+    ef = tmp_path / "Station"
+    ef.mkdir()
+    (ef / "ancien.3mf").write_bytes(_zip(model_settings=AMS_SETTINGS))
+    scan()
+    assert not [p for p in board()["projects"] if p["epic_id"] == e["id"]]
+    (ef / "holder.3mf").write_bytes(_zip(model_settings=AMS_SETTINGS, slice_info=SAVED_PROJECT_SLICE))
+    scan(); scan()
+    holder = proj("holder")
+    assert holder["epic_id"] == e["id"] and len(holder["cards"]) == 2
+    # all-plates export saved next to it -> slicing of the plate cards
+    (ef / "holder.gcode.3mf").write_bytes(_zip(slice_info=ALL_PLATES_SLICE))
+    scan(); scan()
+    assert proj("holder")["stats"]["time_s"] == 9000
+    # a second project in the same folder; its files are not taken by the first one
+    (ef / "stacker.3mf").write_bytes(_zip(model_settings=AMS_SETTINGS, slice_info=SAVED_PROJECT_SLICE))
+    scan(); scan()
+    (ef / "stacker.gcode.3mf").write_bytes(_zip(slice_info=ALL_PLATES_SLICE))
+    scan(); scan()
+    assert proj("stacker")["stats"]["time_s"] == 9000 and len(proj("holder")["cards"]) == 2
+
+    # project folder: STL -> card (same card when saved again), its sliced plate -> same card
+    pid = c.post("/api/projects", json={"name": "Boites"}).json()["id"]
+    pf = tmp_path / "Boites"
+    pf.mkdir()
+    scan()
+    (pf / "couvercle.stl").write_bytes(b"solid a\nendsolid a\n")
+    scan()
+    cards = proj("Boites")["cards"]
+    assert [k["title"] for k in cards] == ["couvercle"] and cards[0]["files"][0]["name"] == "couvercle.stl"
+    (pf / "couvercle.stl").write_bytes(b"solid b\nendsolid b\n"); touch(pf / "couvercle.stl")
+    scan()
+    cards = proj("Boites")["cards"]
+    assert len(cards) == 1 and len(cards[0]["files"]) == 1
+    (pf / "couvercle.gcode.3mf").write_bytes(_zip(slice_info=AMS_SLICE))
+    scan()
+    k = proj("Boites")["cards"][0]
+    assert k["analysis"]["time_s"] == 3600 and {f["name"] for f in k["files"]} == {"couvercle.stl", "couvercle.gcode.3mf"}
+    assert scan() == 0                               # nothing new: nothing done
+    assert any("couvercle" in ev["msg"] for ev in watcher.events)
+
+    for p in board()["projects"]:
+        c.delete(f"/api/projects/{p['id']}")
+    c.delete(f"/api/epics/{e['id']}")
