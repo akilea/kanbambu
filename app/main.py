@@ -22,6 +22,16 @@ app = FastAPI(title="kanbambu")
 db.init()
 
 
+@app.middleware("http")
+async def no_stale_ui(request, call_next):
+    """The page, scripts and styles are revalidated on every load, so an update shows up
+    right away instead of the browser keeping an old copy."""
+    response = await call_next(request)
+    if not request.url.path.startswith("/files/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 # ---------- helpers ----------
 
 def kind_of(name: str) -> str:
