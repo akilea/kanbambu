@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS files (
     size INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 CREATE TABLE IF NOT EXISTS epics (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -93,7 +97,13 @@ def init():
                                 ("cards", "plate_index", "INTEGER"),
                                 ("projects", "sets", "INTEGER DEFAULT 1"),
                                 ("attempts", "parts", "TEXT DEFAULT '{}'"),
-                                ("projects", "epic_id", "INTEGER")):
+                                ("projects", "epic_id", "INTEGER"),
+                                ("projects", "folder", "TEXT DEFAULT ''"),      # '' = default folder
+                                ("projects", "bambu_src", "TEXT"),             # file in the folder it came from
+                                ("projects", "bambu_mtime", "REAL"),
+                                ("projects", "slicing_src", "TEXT"),
+                                ("projects", "slicing_mtime", "REAL"),
+                                ("epics", "folder", "TEXT DEFAULT ''")):
             if col not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
         # the Park lane was merged into the queue ("analysed")

@@ -192,6 +192,7 @@ function projectHtml(p) {
       ${p.eff_sets > 1 ? `<span class="sets" title="Exemplaires${p.eff_sets !== p.sets ? ` : ×${p.sets} × epic` : ""}">×${p.eff_sets}</span>` : ""}
       ${p.url ? `<a class="ib" href="${esc(p.url)}" target="_blank" rel="noopener" title="Lien" onclick="event.stopPropagation()">${ic("link")}</a>` : ""}
       ${p.bambu ? bambuBtn(p.bambu) : ""}
+      ${p.src_changed ? `<button class="ib changed" data-act="refresh" title="Fichier Bambu enregistré à nouveau dans le dossier : relire">${ic("refresh-cw")}</button>` : ""}
       ${p.bom.length ? `<button class="ib" data-act="edit-project" title="BOM">${ic("list-checks")}${bomDone}/${p.bom.length}</button>` : ""}
       <span class="p-sp"></span>
       ${p.stats ? `<span class="p-counts" title="Reste à imprimer / total du projet"><span>${ic("clock", "sm")} ${fmtTime(p.stats.left_time_s) || "0m"}<span class="tot">/${fmtTime(p.stats.time_s)}</span></span> <span>${ic("weight", "sm")} ${fmtG(p.stats.left_g)}<span class="tot">/${fmtG(p.stats.g)}</span></span></span>` : ""}
@@ -334,6 +335,7 @@ function wire() {
       e.stopPropagation();
       const p = findProject(proj.dataset.id);
       if (act.dataset.act === "edit-project") return projectModal(p);
+      if (act.dataset.act === "refresh") return api("POST", `/api/projects/${p.id}/refresh`).then(load);
       if (act.dataset.act === "add-card") return newCardInput(act, p);
       if (act.dataset.act === "more-done") { openDone.has(p.id) ? openDone.delete(p.id) : openDone.add(p.id); return render(); }
       if (act.dataset.act === "toggle" && !e.target.closest(".p-grip")) {
@@ -736,6 +738,55 @@ function cardModal(c) {
   s.querySelectorAll("[data-del-att]").forEach((b) => armDelete(b, async () => { await api("DELETE", `/api/attempts/${b.dataset.delAtt}`); refresh(); }));
 }
 
+/* Folder on the PC running kanbambu: path (default or custom), open it, and its Bambu files. */
+function folderSecHtml(path, custom, hint = "") {
+  return `
+    <div class="sec">
+      <div class="sec-h">${ic("folder", "sm")} Dossier</div>
+      <div class="row">
+        <input id="fpath" value="${esc(custom)}" placeholder="${esc(path)}" title="Vide = dossier par défaut">
+        <button class="ib" id="fopen" title="Ouvrir sur le PC">${ic("folder-open")}</button>
+      </div>
+      <div class="list" id="flist"><div class="sub">…</div></div>
+      ${hint ? `<div class="sub">${hint}</div>` : ""}
+    </div>`;
+}
+function wireFolder(s, { folder, save, open, list, row, onRow, all }) {
+  $("#fpath", s).onchange = (ev) => save(ev.target.value.trim());
+  $("#fopen", s).onclick = async () => {
+    try { await open(); } catch (err) { $("#flist", s).innerHTML = `<div class="sub ko">Impossible d'ouvrir ${esc(folder)}</div>`; }
+  };
+  list().then((r) => {
+    const el = $("#flist", s);
+    if (!el) return;
+    if (!r.exists) { el.innerHTML = `<div class="sub">Pas encore créé (${ic("folder-open", "sm")} le crée).</div>`; return; }
+    if (!r.files.length) { el.innerHTML = `<div class="sub">Aucun fichier 3D.</div>`; return; }
+    const fresh = all && r.files.filter((f) => !f.project_id).length > 1;
+    el.innerHTML = r.files.map((f) => `
+      <div class="li"><span>${ic(fileIcon(f.kind), "sm")}</span><span class="name" title="${esc(f.name)}">${esc(f.name)}</span>
+        <span class="sub">${new Date(f.mtime * 1000).toLocaleDateString("fr-CA", { month: "short", day: "numeric" })}</span>${row(f)}</div>`).join("")
+      + (fresh ? `<button class="add-card" id="fall" title="Un projet par fichier pas encore importé">${ic("plus")} ${ic("folders", "sm")} tous</button>` : "");
+    el.querySelectorAll("[data-import]").forEach((b) => (b.onclick = () => onRow(b)));
+    if ($("#fall", el)) $("#fall", el).onclick = () => all(r.files);
+  }).catch(() => { const el = $("#flist", s); if (el) el.innerHTML = ""; });
+}
+
+async function settingsModal() {
+  const st = await api("GET", "/api/settings");
+  const s = openModal(`
+    <div class="row">${ic("settings")}<b>Réglages</b></div>
+    <div class="sec">
+      <div class="sec-h">${ic("folder", "sm")} Dossier des modèles</div>
+      <input id="root" value="${esc(st.models_root)}">
+      <div class="sub">Sur le PC qui fait tourner kanbambu : ${esc(st.models_root_path)}<br>
+        Par défaut, chaque epic a un sous-dossier à son nom, et chaque projet un sous-dossier dans celui de son epic.</div>
+    </div>
+    <div class="foot"><span></span><button class="btn primary" id="sclose">${ic("circle-check")}</button></div>`, load);
+  $("#root", s).onchange = async (ev) => { await api("PUT", "/api/settings", { models_root: ev.target.value }); closeModal(true); settingsModal(); };
+  $("#sclose", s).onclick = () => closeModal();
+}
+$("#settings").onclick = settingsModal;
+
 /* Bambu Studio style totals: filaments, then time per plate. */
 function statsHtml(st) {
   const laneIcon = LANE_ICON;
@@ -790,6 +841,7 @@ function projectModal(p) {
         <div class="sub" id="szMsg" hidden></div>
       </div>
     </div>
+    ${folderSecHtml(p.folder, p.folder_custom)}
     <div class="sec">
       <div class="sec-h">${ic("puzzle", "sm")} Pièces
         <span class="row" style="margin-left:auto;text-transform:none" title="Exemplaires du projet">${ic("copy", "sm")} ×${stepper("sets", p.sets, 1)}</span></div>
@@ -856,13 +908,27 @@ function projectModal(p) {
   drawBom();
   $("#addBom", s).onclick = () => { bom.push({ qty: 1, name: "", done: false }); drawBom(); $("#bom", s).querySelector(".li:last-child input.name").focus(); };
 
-  $("#name", s).onchange = (e) => patch({ name: e.target.value.trim() || p.name });
+  $("#name", s).onchange = (e) => patch({ name: e.target.value.trim() || p.name }).then(reopen);  // default folder follows the name
   $("#url", s).onchange = (e) => patch({ url: e.target.value.trim() });
   $("#close", s).onclick = () => closeModal();
   armDelete($("#del", s), async () => { await api("DELETE", `/api/projects/${p.id}`); closeModal(); });
 
   const refresh = async () => { BOARD = await api("GET", "/api/board"); projectModal(findProject(p.id)); };
   dropZone($("#pimg", s), async (files) => { if (files[0]) { await uploadFile(files[0], { project_id: p.id, role: "image" }); refresh(); } });
+  wireFolder(s, {
+    folder: p.folder,
+    save: (v) => patch({ folder: v }).then(reopen),
+    open: () => api("POST", `/api/projects/${p.id}/open-folder`),
+    list: () => api("GET", `/api/projects/${p.id}/folder`),
+    row: (f) => {
+      const role = f.kind === "gcode3mf" ? "slicing" : f.kind === "3mf" ? "bambu" : null;
+      const btn = !role ? "" : `<button class="ib ${f.changed ? "changed" : ""}" data-import="${esc(f.name)}" data-role="${role}"
+        title="${f.changed ? "Modifié depuis l'import : relire" : role === "bambu" ? "Utiliser comme fichier du projet (plateaux, pièces)" : "Lire le slicing (temps, filament)"}">
+        ${ic(f.changed ? "refresh-cw" : f.current ? "circle-check" : role === "bambu" ? "file-box" : "clock")}</button>`;
+      return btn;
+    },
+    onRow: async (b) => { await api("POST", `/api/projects/${p.id}/import`, { name: b.dataset.import, role: b.dataset.role }); reopen(); },
+  });
   dropZone($("#sz", s), async (files) => {
     if (!files[0]) return;
     const msg = $("#szMsg", s);
@@ -944,13 +1010,14 @@ function epicModal(e) {
           ${p.stats ? `<span class="sub">${fmtTime(p.stats.left_time_s) || "0m"}/${fmtTime(p.stats.time_s)}</span>` : ""}</div>`).join("") || `<div class="sub">Aucun projet.</div>`}</div>
       <div class="drop-zone" id="efiles" title="Un projet par fichier">${ic("upload")} .3mf → un projet par fichier</div>
     </div>
+    ${folderSecHtml(e.folder, e.folder_custom, "Les .3mf de ce dossier : un projet par fichier")}
     <div class="foot">
       <button class="btn danger" id="edel" title="Supprimer l'epic (les projets restent)">${ic("trash-2")}</button>
       <button class="btn primary" id="eclose" title="Fermer">${ic("circle-check")}</button>
     </div>`, load);
   const patch = (body) => api("PATCH", `/api/epics/${e.id}`, body);
   const reopen = async () => { BOARD = await api("GET", "/api/board"); epicModal(BOARD.epics.find((x) => x.id === e.id)); };
-  $("#ename", s).onchange = (ev) => patch({ name: ev.target.value.trim() || e.name });
+  $("#ename", s).onchange = (ev) => patch({ name: ev.target.value.trim() || e.name }).then(reopen);  // default folder follows the name
   $("#eurl", s).onchange = (ev) => patch({ url: ev.target.value.trim() });
   wireSteppers(s, (inp) => patch({ sets: Math.max(1, +inp.value || 1) }).then(reopen));
   dropZone($("#eimg", s), async (files) => {
@@ -961,6 +1028,17 @@ function epicModal(e) {
     reopen();
   });
   dropZone($("#efiles", s), async (files) => { await addProjectsFromFiles(e.id, files); reopen(); });
+  wireFolder(s, {
+    folder: e.folder,
+    save: (v) => patch({ folder: v }).then(reopen),
+    open: () => api("POST", `/api/epics/${e.id}/open-folder`),
+    list: () => api("GET", `/api/epics/${e.id}/folder`),
+    row: (f) => f.project_id
+      ? `<span class="ib" title="Déjà un projet">${ic("circle-check", "ok")}</span>`
+      : `<button class="ib" data-import="${esc(f.name)}" title="Créer un projet avec ce fichier">${ic("plus")}${ic("folder-open", "sm")}</button>`,
+    onRow: async (b) => { await api("POST", `/api/epics/${e.id}/import`, { names: [b.dataset.import] }); reopen(); },
+    all: async (files) => { await api("POST", `/api/epics/${e.id}/import`, { names: files.filter((f) => !f.project_id).map((f) => f.name) }); reopen(); },
+  });
   s.querySelectorAll("[data-open-project]").forEach((r) => (r.onclick = () => projectModal(findProject(r.dataset.openProject))));
   $("#eclose", s).onclick = () => closeModal();
   armDelete($("#edel", s), async () => { await api("DELETE", `/api/epics/${e.id}`); closeModal(); });

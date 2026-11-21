@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import db
+from . import folders as fld
 from .threemf import merge, parse_3mf, part_name
 
 # "analysed" is shown as the Queue: everything waiting to be printed, sliced or not.
@@ -125,6 +126,9 @@ def project_dict(c, p, epic=None) -> dict:
         "sets": p["sets"] or 1,
         "position": p["position"],
         "epic_id": p["epic_id"],
+        "folder": fld.project_folder(c, p), "folder_custom": p["folder"] or "",
+        # the Bambu file or slicing export it came from was saved again in the folder
+        "src_changed": fld.changed(p["bambu_src"], p["bambu_mtime"]) or fld.changed(p["slicing_src"], p["slicing_mtime"]),
         # copies actually needed: the project's own count times its epic's
         "eff_sets": (p["sets"] or 1) * ((epic["sets"] or 1) if epic else 1),
         "parts": inventory(c, p, cards, (epic["sets"] or 1) if epic else 1),
@@ -238,14 +242,15 @@ def board():
     with db.conn() as c:
         epics = {e["id"]: e for e in c.execute("SELECT * FROM epics ORDER BY position, id")}
         return {
-            "epics": [epic_dict(e) for e in epics.values()],
+            "epics": [epic_dict(e, c) for e in epics.values()],
             "projects": [project_dict(c, p, epics.get(p["epic_id"])) for p in c.execute(
                 "SELECT * FROM projects ORDER BY position, id")],
         }
 
 
-def epic_dict(e) -> dict:
+def epic_dict(e, c=None) -> dict:
     return {"id": e["id"], "name": e["name"], "url": e["url"], "sets": e["sets"] or 1,
+            "folder": fld.epic_folder(c, e) if c else "", "folder_custom": e["folder"] or "",
             "position": e["position"], "collapsed": bool(e["collapsed"]),
             "image": f"/files/{e['image_file_id']}/image" if e["image_file_id"] else None}
 
@@ -257,6 +262,7 @@ class EpicIn(BaseModel):
     url: Optional[str] = None
     sets: Optional[int] = None
     collapsed: Optional[bool] = None
+    folder: Optional[str] = None       # "" = default folder
 
 
 @app.post("/api/epics")
@@ -266,7 +272,7 @@ def create_epic(body: EpicIn):
                         "WHERE epic_id IS NULL UNION ALL SELECT COALESCE(MIN(position), 0) FROM epics)").fetchone()[0]
         eid = c.execute("INSERT INTO epics (name, url, position) VALUES (?,?,?)",
                         ((body.name or "Epic").strip(), body.url or "", pos)).lastrowid
-        return epic_dict(c.execute("SELECT * FROM epics WHERE id=?", (eid,)).fetchone())
+        return epic_dict(c.execute("SELECT * FROM epics WHERE id=?", (eid,)).fetchone(), c)
 
 
 @app.patch("/api/epics/{eid}")
@@ -289,7 +295,7 @@ def update_epic(eid: int, body: EpicIn):
         e = c.execute("SELECT * FROM epics WHERE id=?", (eid,)).fetchone()
         if not e:
             raise HTTPException(404)
-        return epic_dict(e)
+        return epic_dict(e, c)
 
 
 @app.delete("/api/epics/{eid}")
@@ -339,6 +345,7 @@ class ProjectIn(BaseModel):
     collapsed: Optional[bool] = None
     sets: Optional[int] = None
     epic_id: Optional[int] = None      # 0 = take it out of its epic
+    folder: Optional[str] = None       # "" = default folder
 
 
 @app.post("/api/projects")
@@ -600,7 +607,166 @@ async def upload(file: UploadFile = File(...), project_id: Optional[int] = Form(
     """role: attach (card file), preview (card image), image (project image), bambu (project file),
     slicing (a .gcode.3mf of all plates: fills time/filament of the project's plate cards, not kept)."""
     data = await file.read()
-    name = safe_name(file.filename)
+    if role in ("bambu", "slicing") and project_id:  # sent from the browser: no longer tied to a folder file
+        with db.conn() as c:
+            c.execute(f"UPDATE projects SET {role}_src=NULL, {role}_mtime=NULL WHERE id=?", (project_id,))
+    return ingest(data, file.filename, project_id, card_id, role, epic_id)
+
+
+# ---------- folders on this machine ----------
+
+class SettingsIn(BaseModel):
+    models_root: Optional[str] = None
+
+
+@app.get("/api/settings")
+def get_settings():
+    with db.conn() as c:
+        return {"models_root": fld.get_setting(c, "models_root") or fld.DEFAULT_ROOT,
+                "models_root_path": fld.models_root(c)}
+
+
+@app.put("/api/settings")
+def put_settings(body: SettingsIn):
+    with db.conn() as c:
+        if body.models_root is not None:
+            fld.set_setting(c, "models_root", body.models_root.strip())
+    return get_settings()
+
+
+def _project(c, pid):
+    p = c.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    if not p:
+        raise HTTPException(404)
+    return p
+
+
+@app.post("/api/projects/{pid}/open-folder")
+def open_project_folder(pid: int):
+    with db.conn() as c:
+        path = fld.project_folder(c, _project(c, pid))
+    try:
+        fld.open_folder(path)
+    except OSError as e:
+        raise HTTPException(500, f"Impossible d'ouvrir {path} : {e}")
+    return {"path": path}
+
+
+@app.post("/api/epics/{eid}/open-folder")
+def open_epic_folder(eid: int):
+    with db.conn() as c:
+        e = c.execute("SELECT * FROM epics WHERE id=?", (eid,)).fetchone()
+        if not e:
+            raise HTTPException(404)
+        path = fld.epic_folder(c, e)
+    try:
+        fld.open_folder(path)
+    except OSError as e:
+        raise HTTPException(500, f"Impossible d'ouvrir {path} : {e}")
+    return {"path": path}
+
+
+@app.get("/api/projects/{pid}/folder")
+def project_folder_files(pid: int):
+    with db.conn() as c:
+        p = _project(c, pid)
+        path = fld.project_folder(c, p)
+    files = fld.list_models(path)
+    for f in files:
+        full = os.path.join(path, f["name"])
+        f["current"] = full in (p["bambu_src"], p["slicing_src"])
+        f["changed"] = (full == p["bambu_src"] and fld.changed(full, p["bambu_mtime"])) or \
+                       (full == p["slicing_src"] and fld.changed(full, p["slicing_mtime"]))
+    return {"path": path, "exists": os.path.isdir(path), "files": files}
+
+
+class ImportIn(BaseModel):
+    name: str          # file name relative to the folder
+    role: str          # bambu | slicing
+
+
+def import_from_folder(pid: int, folder: str, rel: str, role: str):
+    if role not in ("bambu", "slicing"):
+        raise HTTPException(400, "role")
+    try:
+        full = fld.resolve_inside(folder, rel)
+    except FileNotFoundError:
+        raise HTTPException(404, f"{rel} introuvable dans {folder}")
+    with open(full, "rb") as f:
+        data = f.read()
+    out = ingest(data, os.path.basename(full), project_id=pid, role=role)
+    with db.conn() as c:
+        c.execute(f"UPDATE projects SET {role}_src=?, {role}_mtime=? WHERE id=?", (full, os.path.getmtime(full), pid))
+    return out
+
+
+@app.post("/api/projects/{pid}/import")
+def import_project_file(pid: int, body: ImportIn):
+    with db.conn() as c:
+        folder = fld.project_folder(c, _project(c, pid))
+    return import_from_folder(pid, folder, body.name, body.role)
+
+
+@app.post("/api/projects/{pid}/refresh")
+def refresh_project(pid: int):
+    """Re-read the Bambu file and slicing export that were saved again in the folder."""
+    with db.conn() as c:
+        p = _project(c, pid)
+    done = []
+    for role in ("bambu", "slicing"):
+        src, mt = p[f"{role}_src"], p[f"{role}_mtime"]
+        if fld.changed(src, mt):
+            import_from_folder(pid, os.path.dirname(src), os.path.basename(src), role)
+            done.append(role)
+    return {"refreshed": done}
+
+
+@app.get("/api/epics/{eid}/folder")
+def epic_folder_files(eid: int):
+    """Bambu projects (.3mf) in the epic's folder, and which project of the epic uses each."""
+    with db.conn() as c:
+        e = c.execute("SELECT * FROM epics WHERE id=?", (eid,)).fetchone()
+        if not e:
+            raise HTTPException(404)
+        path = fld.epic_folder(c, e)
+        used = {r["bambu_src"]: r["id"] for r in c.execute(
+            "SELECT id, bambu_src FROM projects WHERE bambu_src IS NOT NULL")}
+    files = [f for f in fld.list_models(path) if f["kind"] == "3mf"]
+    for f in files:
+        f["project_id"] = used.get(os.path.join(path, f["name"]))
+    return {"path": path, "exists": os.path.isdir(path), "files": files}
+
+
+class EpicImport(BaseModel):
+    names: List[str]
+
+
+@app.post("/api/epics/{eid}/import")
+def epic_import(eid: int, body: EpicImport):
+    """One project per Bambu file of the epic's folder; each project's folder is where its file is."""
+    with db.conn() as c:
+        e = c.execute("SELECT * FROM epics WHERE id=?", (eid,)).fetchone()
+        if not e:
+            raise HTTPException(404)
+        path = fld.epic_folder(c, e)
+    made = []
+    for rel in body.names:
+        try:
+            full = fld.resolve_inside(path, rel)
+        except FileNotFoundError:
+            continue
+        name = re.sub(r"\.gcode\.3mf$|\.3mf$", "", os.path.basename(full), flags=re.I)
+        with db.conn() as c:
+            pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM projects WHERE epic_id=?", (eid,)).fetchone()[0]
+            pid = c.execute("INSERT INTO projects (name, position, epic_id, folder) VALUES (?,?,?,?)",
+                            (name, pos, eid, os.path.dirname(full))).lastrowid
+        import_from_folder(pid, os.path.dirname(full), os.path.basename(full), "bambu")
+        made.append(pid)
+    return {"projects": made}
+
+
+def ingest(data: bytes, filename: str, project_id=None, card_id=None, role="attach", epic_id=None):
+    name = safe_name(filename)
     if role == "slicing" and project_id:
         return import_slicing(project_id, data)
     fid = store_bytes(data, name, project_id if role in ("image", "bambu") else None,

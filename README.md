@@ -77,6 +77,19 @@ plusieurs projets, un par `.3mf`.
 - **Exemplaires** : ceux de l'epic multiplient ceux de chaque projet (epic ×2, projet ×3 → 6), pièces et BOM comprises.
 - Supprimer un epic garde ses projets.
 
+### Dossiers
+
+Chaque epic et chaque projet a un dossier sur le PC qui fait tourner kanbambu. Par défaut, sous le dossier des
+modèles (⚙ Réglages, `~/Documents/3DModel` = `C:\Users\<toi>\Documents\3DModel`) :
+`3DModel/<epic>/<projet>/`, ou `3DModel/<projet>/` hors epic. On peut en choisir un autre dans la fiche.
+
+- 📂 ouvre le dossier dans l'Explorateur **du PC** (il est créé au besoin), même si tu cliques depuis le cell.
+- La fiche liste les fichiers 3D du dossier : un clic sur un `.3mf` en fait le fichier du projet (plateaux,
+  pièces), un clic sur un `.gcode.3mf` lit le slicing.
+- Dans la fiche d'un epic : chaque `.3mf` du dossier devient un projet d'un clic (ou « tous »).
+- Quand un fichier importé du dossier est enregistré à nouveau dans Bambu Studio, le projet affiche ↻ : un clic
+  le relit (plateaux, temps, filament), sans rien re-glisser.
+
 ### Projet Bambu : une carte par plateau
 
 Dans la fiche du projet (✏️), ajoute le `.3mf` du projet Bambu Studio. kanbambu lit tous ses plateaux et crée

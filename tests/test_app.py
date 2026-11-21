@@ -428,3 +428,44 @@ def test_epics():
     assert all(x["epic_id"] is None for x in b["projects"])
     for x in (p1, p2, loose):
         c.delete(f"/api/projects/{x['id']}")
+
+
+def test_folders(tmp_path):
+    c = TestClient(app)
+    root = tmp_path / "3DModel"
+    assert c.put("/api/settings", json={"models_root": str(root)}).json()["models_root_path"] == str(root)
+    e = c.post("/api/epics", json={"name": "Station: AMS?"}).json()
+    b = c.get("/api/board").json()
+    assert next(x for x in b["epics"] if x["id"] == e["id"])["folder"] == str(root / "Station_ AMS_")
+
+    # Bambu files saved in the epic's folder -> one project each, imported from disk
+    ef = root / "Station_ AMS_"
+    ef.mkdir(parents=True)
+    (ef / "stacker.3mf").write_bytes(_zip(model_settings=AMS_SETTINGS, slice_info=SAVED_PROJECT_SLICE))
+    (ef / "stacker.gcode.3mf").write_bytes(_zip(slice_info=ALL_PLATES_SLICE))
+    (ef / "notes.txt").write_text("x")
+    lst = c.get(f"/api/epics/{e['id']}/folder").json()
+    assert [f["name"] for f in lst["files"]] == ["stacker.3mf"] and lst["files"][0]["project_id"] is None
+    pid = c.post(f"/api/epics/{e['id']}/import", json={"names": ["stacker.3mf", "../../etc/passwd"]}).json()["projects"][0]
+    pr = lambda: next(p for p in c.get("/api/board").json()["projects"] if p["id"] == pid)  # noqa: E731
+    assert pr()["epic_id"] == e["id"] and pr()["folder"] == str(ef) and len(pr()["cards"]) == 2
+    assert c.get(f"/api/epics/{e['id']}/folder").json()["files"][0]["project_id"] == pid
+
+    # slicing export from the same folder, then a newer save is noticed and re-read
+    files = c.get(f"/api/projects/{pid}/folder").json()["files"]
+    assert {f["name"]: f["current"] for f in files} == {"stacker.3mf": True, "stacker.gcode.3mf": False}
+    c.post(f"/api/projects/{pid}/import", json={"name": "stacker.gcode.3mf", "role": "slicing"})
+    assert pr()["stats"]["time_s"] == 9000 and not pr()["src_changed"]
+    import os as _os, time as _t
+    later = _t.time() + 60
+    _os.utime(ef / "stacker.gcode.3mf", (later, later))
+    assert pr()["src_changed"]
+    assert c.post(f"/api/projects/{pid}/refresh").json()["refreshed"] == ["slicing"]
+    assert not pr()["src_changed"]
+    assert c.post(f"/api/projects/{pid}/import", json={"name": "../x.3mf", "role": "bambu"}).status_code == 404
+
+    # a project's own folder can be set by hand
+    c.patch(f"/api/projects/{pid}", json={"folder": str(tmp_path / "ailleurs")})
+    assert pr()["folder"] == str(tmp_path / "ailleurs")
+    c.delete(f"/api/projects/{pid}")
+    c.delete(f"/api/epics/{e['id']}")
