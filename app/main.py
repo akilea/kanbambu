@@ -707,6 +707,26 @@ def import_project_file(pid: int, body: ImportIn):
     return import_from_folder(pid, folder, body.name, body.role)
 
 
+class FileIn(BaseModel):
+    name: str
+
+
+@app.post("/api/projects/{pid}/card-from-file")
+def card_from_folder_file(pid: int, body: FileIn):
+    """A print card for a model file of the project's folder (STL, STEP…), named after it."""
+    with db.conn() as c:
+        folder = fld.project_folder(c, _project(c, pid))
+    try:
+        full = fld.resolve_inside(folder, body.name)
+    except FileNotFoundError:
+        raise HTTPException(404, f"{body.name} introuvable")
+    card = create_card(CardIn(project_id=pid, title=re.sub(r"\.[^.]+$", "", os.path.basename(full))))
+    with open(full, "rb") as f:
+        ingest(f.read(), os.path.basename(full), card_id=card["id"], role="attach")
+    with db.conn() as c:
+        return card_dict(c, get_card(c, card["id"]))
+
+
 @app.post("/api/projects/{pid}/refresh")
 def refresh_project(pid: int):
     """Re-read the Bambu file and slicing export that were saved again in the folder."""

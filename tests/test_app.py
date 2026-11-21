@@ -469,3 +469,15 @@ def test_folders(tmp_path):
     assert pr()["folder"] == str(tmp_path / "ailleurs")
     c.delete(f"/api/projects/{pid}")
     c.delete(f"/api/epics/{e['id']}")
+
+
+def test_card_from_folder_stl(tmp_path):
+    c = TestClient(app)
+    c.put("/api/settings", json={"models_root": str(tmp_path)})
+    pid = c.post("/api/projects", json={"name": "Boites"}).json()["id"]
+    (tmp_path / "Boites").mkdir()
+    (tmp_path / "Boites" / "petite boite.stl").write_bytes(b"solid x\nendsolid x\n")
+    k = c.post(f"/api/projects/{pid}/card-from-file", json={"name": "petite boite.stl"}).json()
+    assert k["title"] == "petite boite" and k["files"][0]["kind"] == "stl"
+    assert c.post(f"/api/projects/{pid}/card-from-file", json={"name": "../x.stl"}).status_code == 404
+    c.delete(f"/api/projects/{pid}")

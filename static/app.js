@@ -56,6 +56,31 @@ const bambuBtn = (f, cls = "ib") =>
 async function load() {
   BOARD = await api("GET", "/api/board");
   render();
+  stlPreviews();
+}
+
+/* Cards with an STL but no preview get one, rendered here in the browser (three.js, loaded only
+   when needed) and saved as the card's image. An STL carries no slicing data: time and filament
+   still come from a .gcode.3mf. */
+const stlTried = new Set();
+async function stlPreviews() {
+  const todo = BOARD.projects.flatMap((p) => p.cards)
+    .filter((c) => !c.preview && !stlTried.has(c.id) && c.files.some((f) => f.kind === "stl"));
+  if (!todo.length) return;
+  let mod;
+  try { mod = await import("./vendor/stl-thumb.js"); } catch (e) { return; }
+  let made = 0;
+  for (const c of todo) {
+    stlTried.add(c.id);
+    const f = c.files.find((x) => x.kind === "stl");
+    try {
+      const buf = await (await fetch(`${f.url}?dl=1`)).arrayBuffer();
+      const { png } = await mod.stlThumbnail(buf);
+      await uploadFile(new File([png], "preview.png", { type: "image/png" }), { card_id: c.id, role: "preview" });
+      made++;
+    } catch (e) { /* no WebGL or unreadable file: keep the card as is */ }
+  }
+  if (made && $("#modal").hidden) { BOARD = await api("GET", "/api/board"); render(); }
 }
 
 /* ---------------- render ---------------- */
@@ -922,12 +947,17 @@ function projectModal(p) {
     list: () => api("GET", `/api/projects/${p.id}/folder`),
     row: (f) => {
       const role = f.kind === "gcode3mf" ? "slicing" : f.kind === "3mf" ? "bambu" : null;
-      const btn = !role ? "" : `<button class="ib ${f.changed ? "changed" : ""}" data-import="${esc(f.name)}" data-role="${role}"
+      if (!role) return `<button class="ib" data-import="${esc(f.name)}" data-role="card" title="Nouvelle carte avec ce fichier">${ic("plus")}${ic("list-todo", "sm")}</button>`;
+      const btn = `<button class="ib ${f.changed ? "changed" : ""}" data-import="${esc(f.name)}" data-role="${role}"
         title="${f.changed ? "Modifié depuis l'import : relire" : role === "bambu" ? "Utiliser comme fichier du projet (plateaux, pièces)" : "Lire le slicing (temps, filament)"}">
         ${ic(f.changed ? "refresh-cw" : f.current ? "circle-check" : role === "bambu" ? "file-box" : "clock")}</button>`;
       return btn;
     },
-    onRow: async (b) => { await api("POST", `/api/projects/${p.id}/import`, { name: b.dataset.import, role: b.dataset.role }); reopen(); },
+    onRow: async (b) => {
+      if (b.dataset.role === "card") await api("POST", `/api/projects/${p.id}/card-from-file`, { name: b.dataset.import });
+      else await api("POST", `/api/projects/${p.id}/import`, { name: b.dataset.import, role: b.dataset.role });
+      reopen();
+    },
   });
   dropZone($("#sz", s), async (files) => {
     if (!files[0]) return;

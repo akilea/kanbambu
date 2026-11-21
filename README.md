@@ -50,6 +50,13 @@ Chaque carte a un gros bouton pour passer à l'étape suivante (🖨️ vers Pri
 glisser. Dans la fiche d'une carte, les trois boutons Queue / Printing / Done la déplacent aussi (sur ordinateur
 également). Glisser reste possible pour réordonner (appui long).
 
+### Fichiers STL
+
+Un STL ne contient pas de slicing : il reste joint à la carte (pour l'avoir sous la main), et kanbambu en dessine
+un **aperçu** dans le navigateur (three.js, chargé seulement au besoin) qui devient l'image de la carte. Dans la
+fiche d'un projet, chaque STL du dossier peut devenir une carte d'un clic. Le temps et le filament viennent
+toujours d'un `.gcode.3mf` (ou du temps entré à la main).
+
 ### Slicing, automatiquement
 
 Dans Bambu Studio, tranche la plaque puis **File → Export → Export plate sliced file** (`.gcode.3mf`).
@@ -193,4 +200,6 @@ app/main.py      API FastAPI + fichiers statiques
 app/db.py        SQLite (projects, parts, cards, card_parts, files, attempts)
 app/threemf.py   lecture des .3mf / .gcode.3mf Bambu (plateaux, temps, filament, coût, aperçus)
 static/          interface (HTML/CSS/JS sans build, SortableJS, icônes Lucide)
+tools/serve.py   lancement + mise à jour automatique depuis GitHub
+tools/stl-thumb/ source de static/vendor/stl-thumb.js (aperçu STL, three.js) et build.sh
 ```
