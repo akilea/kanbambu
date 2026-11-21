@@ -83,11 +83,17 @@ def card_dict(c, r) -> dict:
     ok = sum(a["result"] == "success" for a in attempts)
     per = max(1, r["per_plate"] or 1)
     # a card with a composition is a single print run; plates only apply to simple cards
-    total = 1 if comp else max(1, math.ceil((r["qty"] or 1) / per))
+    if comp:
+        # A card with a composition is one print run: still to print unless it sits in Done,
+        # however many times it was printed before (a plate queued again for the next copy).
+        total, left = 1, (0 if r["lane"] == "done" else 1)
+    else:
+        total = max(1, math.ceil((r["qty"] or 1) / per))
+        left = max(0, total - ok)
     return {
         "id": r["id"], "project_id": r["project_id"], "title": r["title"], "lane": r["lane"],
         "qty": r["qty"], "per_plate": per, "url": r["url"], "notes": r["notes"],
-        "plates": total, "plates_done": min(ok, total), "plates_left": max(0, total - ok),
+        "plates": total, "plates_done": total - left, "plates_left": left,
         "plate_index": r["plate_index"],
         "preview": f"/files/{r['preview_file_id']}/preview" if r["preview_file_id"] else None,
         "preview_file_id": r["preview_file_id"],

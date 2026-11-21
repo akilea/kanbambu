@@ -99,6 +99,7 @@ function renderTotals() {
           t[k].g += f.g * (c.plates_left || 0);
         }
   $("#totals").innerHTML = Object.values(t)
+    .filter((f) => f.g >= 0.5)
     .sort((a, b) => b.g - a.g)
     .map((f) => `<span class="chip" title="${esc(f.profile || f.type)}"><span class="dot" style="background:${esc(f.color)}"></span>${fmtG(f.g)}</span>`)
     .join("");

@@ -369,3 +369,22 @@ def test_slicing_from_export():
                  files={"file": ("p.3mf", _zip(slice_info=SAVED_PROJECT_SLICE))})
     assert bad.status_code == 422
     c.delete(f"/api/projects/{pid}")
+
+
+def test_requeued_plate_counts_as_remaining():
+    """A plate printed once, then put back in the Queue for the next copy, is still to print."""
+    c = TestClient(app)
+    pid = c.post("/api/projects", json={"name": "Deux fois"}).json()["id"]
+    c.post("/api/upload", data={"project_id": pid, "role": "bambu"},
+           files={"file": ("p.3mf", _zip(model_settings=AMS_SETTINGS, slice_info=AMS_SLICE))})
+    c.patch(f"/api/projects/{pid}", json={"sets": 2})
+    pr = lambda: next(p for p in c.get("/api/board").json()["projects"] if p["id"] == pid)  # noqa: E731
+    base = next(k for k in pr()["cards"] if k["plate_index"] == 1)
+    mv = lambda lane, **kw: c.post("/api/cards/move", json={  # noqa: E731
+        "card_id": base["id"], "project_id": pid, "lane": lane, "ids": [base["id"]], **kw}).json()
+    mv("printing")
+    assert mv("done", result="success")["plates_left"] == 0
+    again = mv("analysed")
+    assert (again["plates_left"], again["ok"]) == (1, 1)
+    assert pr()["stats"]["left_g"] == 50
+    c.delete(f"/api/projects/{pid}")
