@@ -233,3 +233,5 @@ input.num { width: 58px; text-align: center; }
 .bom-row b { min-width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
 .bom-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .p-side > .p-bom:first-child { margin-top: 0; }
+
+.tot { color: var(--mute); opacity: .75; font-size: .92em; }

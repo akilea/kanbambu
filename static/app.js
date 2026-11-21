@@ -88,20 +88,20 @@ function render() {
   wire();
 }
 
+/* Top bar: filament per color, still to print / grand total of all projects. */
 function renderTotals() {
   const t = {};
-  for (const p of BOARD.projects)
+  const slot = (f) => (t[f.color.toUpperCase() + f.type] ??= { ...f, g: 0, total: 0 });
+  for (const p of BOARD.projects) {
     for (const c of p.cards)
-      if ((c.lane === "analysed" || c.lane === "printing") && c.analysis)
-        for (const f of c.analysis.filaments) {
-          const k = f.color.toUpperCase() + f.type;
-          t[k] ??= { ...f, g: 0 };
-          t[k].g += f.g * (c.plates_left || 0);
-        }
+      if (c.lane !== "done" && c.analysis)
+        for (const f of c.analysis.filaments) slot(f).g += f.g * (c.plates_left || 0);
+    if (p.stats) for (const f of p.stats.filaments) slot(f).total += f.g;
+  }
   $("#totals").innerHTML = Object.values(t)
-    .filter((f) => f.g >= 0.5)
-    .sort((a, b) => b.g - a.g)
-    .map((f) => `<span class="chip" title="${esc(f.profile || f.type)}"><span class="dot" style="background:${esc(f.color)}"></span>${fmtG(f.g)}</span>`)
+    .filter((f) => f.total >= 0.5 || f.g >= 0.5)
+    .sort((a, b) => b.total - a.total)
+    .map((f) => `<span class="chip" title="${esc(f.profile || f.type)} : reste ${fmtG(f.g)} sur ${fmtG(f.total)}"><span class="dot" style="background:${esc(f.color)}"></span><span>${fmtG(f.g)}<span class="tot">/${fmtG(f.total)}</span></span></span>`)
     .join("");
 }
 
@@ -155,7 +155,7 @@ function projectHtml(p) {
       ${p.bambu ? bambuBtn(p.bambu) : ""}
       ${p.bom.length ? `<button class="ib" data-act="edit-project" title="BOM">${ic("list-checks")}${bomDone}/${p.bom.length}</button>` : ""}
       <span class="p-sp"></span>
-      ${p.stats && p.stats.left_time_s ? `<span class="p-counts" title="Reste à imprimer">${ic("clock", "sm")} ${fmtTime(p.stats.left_time_s)} ${ic("weight", "sm")} ${fmtG(p.stats.left_g)}</span>` : ""}
+      ${p.stats ? `<span class="p-counts" title="Reste à imprimer / total du projet"><span>${ic("clock", "sm")} ${fmtTime(p.stats.left_time_s) || "0m"}<span class="tot">/${fmtTime(p.stats.time_s)}</span></span> <span>${ic("weight", "sm")} ${fmtG(p.stats.left_g)}<span class="tot">/${fmtG(p.stats.g)}</span></span></span>` : ""}
       ${need ? `<span class="p-counts ${made >= need ? "ok" : ""}" title="Pièces produites / à produire">${ic("puzzle", "sm")} ${made}/${need}</span>` : ""}
       <span class="p-counts">
         ${p.collapsed ? LANES.map((l) => (by[l].length ? `<span>${ic(laneIcons[l], "sm")} ${by[l].length}</span>` : "")).join("") : ""}

@@ -387,4 +387,5 @@ def test_requeued_plate_counts_as_remaining():
     again = mv("analysed")
     assert (again["plates_left"], again["ok"]) == (1, 1)
     assert pr()["stats"]["left_g"] == 50
+    assert pr()["stats"]["g"] == 100               # grand total: printed once + once more to do
     c.delete(f"/api/projects/{pid}")

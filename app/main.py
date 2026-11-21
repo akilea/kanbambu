@@ -193,11 +193,14 @@ def _scale(a: dict, k: int) -> dict:
 
 
 def project_stats(cards: list) -> Optional[dict]:
-    """Bambu Studio style totals for the whole project, counting every plate to print."""
+    """Bambu Studio style totals for the whole project: grand total (prints done + still to do)
+    and what is left. A plate printed once and queued again for the next copy counts twice."""
     rows = [c for c in cards if c["analysis"]]
     if not rows:
         return None
-    total = merge([_scale(c["analysis"], c["plates"]) for c in rows])
+    runs = {c["id"]: c["ok"] + c["plates_left"] for c in rows}
+    total = merge([_scale(c["analysis"], runs[c["id"]]) for c in rows if runs[c["id"]]] or
+                  [_scale(c["analysis"], 0) for c in rows])
     left = [c for c in rows if c["plates_left"]]
     left_m = merge([_scale(c["analysis"], c["plates_left"]) for c in left]) if left else None
     return {
@@ -207,7 +210,7 @@ def project_stats(cards: list) -> Optional[dict]:
         "left_g": left_m["g"] if left_m else 0,
         # every analysed card, plus imported plates not sliced yet (time unknown)
         "rows": [{"card_id": c["id"], "title": c["title"], "lane": c["lane"], "plate_index": c["plate_index"],
-                  "time_s": c["analysis"]["time_s"] * c["plates"] if c["analysis"] else None,
+                  "time_s": c["analysis"]["time_s"] * max(1, c["ok"] + c["plates_left"]) if c["analysis"] else None,
                   "plates": c["plates"], "plates_done": c["plates_done"]}
                  for c in sorted((c for c in cards if c["analysis"] or c["plate_index"]),
                                  key=lambda c: (c["plate_index"] is None, c["plate_index"] or 0, c["id"]))],
