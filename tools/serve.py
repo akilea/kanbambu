@@ -19,6 +19,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.environ.get("KANBAMBU_DATA", os.path.join(ROOT, "data"))
 os.makedirs(DATA, exist_ok=True)
 LOG = open(os.path.join(DATA, "kanbambu.log"), "a", buffering=1, encoding="utf-8")
+# On Windows, git and pip are console programs: without this, each check every few minutes
+# flashes a terminal window that steals the focus.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 _last = None
@@ -33,7 +36,7 @@ def log(msg):
 
 
 def git(*args):
-    r = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
+    r = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, creationflags=NO_WINDOW)
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
@@ -41,7 +44,7 @@ def start_server(host, port):
     log(f"démarrage du serveur sur {host}:{port}")
     return subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", host, "--port", str(port)],
-        cwd=ROOT, stdout=LOG, stderr=subprocess.STDOUT)
+        cwd=ROOT, stdout=LOG, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
 
 
 def update():
@@ -62,7 +65,7 @@ def update():
     log(f"mis à jour {local[:7]} -> {remote[:7]}")
     if "requirements.txt" in changed.split():
         r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"],
-                           cwd=ROOT, capture_output=True, text=True)
+                           cwd=ROOT, capture_output=True, text=True, creationflags=NO_WINDOW)
         log("pip install: " + ("ok" if r.returncode == 0 else r.stderr.strip()[-500:]))
     return True
 
@@ -74,6 +77,8 @@ def main():
     ap.add_argument("--interval", type=int, default=300, help="secondes entre deux vérifications GitHub")
     a = ap.parse_args()
 
+    with open(os.path.join(DATA, "serve.pid"), "w") as f:   # for tools/kanbambu-stop.bat
+        f.write(str(os.getpid()))
     update()
     server = start_server(a.host, a.port)
     try:

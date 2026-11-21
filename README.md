@@ -21,7 +21,8 @@ Les données (SQLite + fichiers) vivent dans `./data`. Pour sauvegarder, copie c
 `tools\kanbambu-windows.bat` lance kanbambu sans fenêtre et vérifie GitHub toutes les 5 minutes :
 s'il y a du nouveau, il fait `git pull` (et `pip install` si les dépendances ont changé), puis redémarre le
 serveur. Pour qu'il démarre avec Windows : Win+R → `shell:startup` → y mettre un raccourci vers ce fichier.
-Journal : `data/kanbambu.log`. Pour l'arrêter : Gestionnaire des tâches → `pythonw.exe`.
+Journal : `data/kanbambu.log`. Pour l'arrêter : `tools\kanbambu-stop.bat` (ou Gestionnaire des tâches →
+`pythonw.exe`).
 Ailleurs : `python tools/serve.py`.
 
 Sans Docker :
