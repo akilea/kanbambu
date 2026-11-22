@@ -160,6 +160,11 @@ pièces manquantes**, en demandant ce qui change. ⧉ (fiche de la carte) dupliq
 La **BOM** (vis, aimants…) se saisit par exemplaire : avec ×N exemplaires, la fiche affiche `= total` et la colonne
 de gauche montre la liste déjà multipliée, à cocher au fur et à mesure.
 
+**Imprimer un plateau une fois de plus** : ⧉ au survol d'une carte, ou « Imprimer encore » dans sa fiche. Une
+copie (fichiers, slicing, pièces) arrive dans la Queue, avec son propre résultat.
+
+Survoler une image (carte, projet) l'affiche en grand.
+
 Done garde les 3 cartes les plus récentes par projet ; `+N` affiche les autres.
 
 ### Copies et plateaux (cartes simples)

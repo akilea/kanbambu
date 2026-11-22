@@ -260,6 +260,7 @@ function cardHtml(c, p, hidden) {
   return `
   <div class="card ${failed ? "failed" : ""} ${canReprint || partial ? "partial" : ""}" data-id="${c.id}" data-lane="${c.lane}" ${hidden ? "hidden" : ""}>
     ${c.preview ? `<img class="thumb" src="${c.preview}" alt="" loading="lazy">` : ""}
+    <button class="ib cdup" data-dup title="Imprimer ce plateau une fois de plus (copie dans la Queue)">${ic("copy", "sm")}</button>
     <div class="c-body">
       <div class="c-title">${esc(c.title)}${c.qty > 1 && !c.parts.length ? `<span class="qty">×${c.qty}</span>` : ""}</div>
       ${c.parts.length ? `<div class="c-parts">${c.parts.map((x) => {
@@ -376,6 +377,7 @@ function wire() {
     }
     const card = e.target.closest(".card");
     if (card && e.target.closest("[data-reprint]")) return reprint(findCard(card.dataset.id));
+    if (card && e.target.closest("[data-dup]")) return duplicate(findCard(card.dataset.id));
     if (card && e.target.closest("[data-relaunch]")) return relaunch(findCard(card.dataset.id));
     const q = e.target.closest("[data-qmove]");
     if (card && q) return moveCard(findCard(card.dataset.id), q.dataset.qmove);
@@ -430,6 +432,13 @@ function onCardDrop(e) {
     return move();
   }
   return move();
+}
+
+/* Print the same plate once more: a copy of the card in the Queue (files, slicing, pieces). */
+async function duplicate(card) {
+  await api("POST", `/api/cards/${card.id}/duplicate`);
+  toast(`⧉ ${card.title} : une impression de plus dans la Queue`);
+  return load();
 }
 
 /* Move a card to the end of another lane without dragging (buttons, phones).
@@ -723,7 +732,7 @@ function cardModal(c) {
     <div class="foot">
       <button class="btn danger" id="del" title="Supprimer la carte">${ic("trash-2")}</button>
       <span class="p-sp"></span>
-      <button class="btn" id="dup" title="Imprimer encore (dupliquer)">${ic("copy")}</button>
+      <button class="btn" id="dup" title="Copie de ce plateau dans la Queue">${ic("copy")} Imprimer encore</button>
       <button class="btn primary" id="close" title="Fermer">${ic("circle-check")}</button>
     </div>`, load);
 
@@ -738,7 +747,11 @@ function cardModal(c) {
     closeModal(true);
     moveCard(c, b.dataset.to);
   }));
-  $("#dup", s).onclick = async () => { const n = await api("POST", `/api/cards/${c.id}/duplicate`); BOARD = await api("GET", "/api/board"); cardModal(findCard(n.id)); };
+  $("#dup", s).onclick = async () => {
+    await api("POST", `/api/cards/${c.id}/duplicate`);
+    toast(`⧉ ${c.title} : une impression de plus dans la Queue`);
+    refreshCard();
+  };
   if (usesParts) wireSteppers(s, async () => {
     const parts = Object.fromEntries(proj.parts.map((x) => [x.id, +$(`#cp-${x.id}`, s).value || 0]));
     await api("PUT", `/api/cards/${c.id}/parts`, { parts });
@@ -818,6 +831,27 @@ async function settingsModal() {
   $("#sclose", s).onclick = () => closeModal();
 }
 $("#settings").onclick = settingsModal;
+
+/* Bigger preview while the pointer rests on a card or project image (mouse only). */
+(() => {
+  const z = document.createElement("img");
+  z.id = "zoom";
+  document.body.appendChild(z);
+  let on = null;
+  document.addEventListener("mouseover", (e) => {
+    const img = e.target.closest?.(".card .thumb, .p-img[src], .big-img img");
+    if (!img || matchMedia("(hover: none)").matches) return;
+    on = img;
+    z.src = img.src;
+    const r = img.getBoundingClientRect(), size = Math.min(320, innerHeight - 20);
+    let x = r.right + 10, y = r.top + r.height / 2 - size / 2;
+    if (x + size > innerWidth - 8) x = r.left - size - 10;
+    z.style.cssText = `width:${size}px;height:${size}px;left:${Math.max(8, x)}px;top:${Math.max(8, Math.min(y, innerHeight - size - 8))}px`;
+    z.classList.add("show");
+  });
+  document.addEventListener("mouseout", (e) => { if (on && e.target === on) { z.classList.remove("show"); on = null; } });
+  document.addEventListener("mousedown", () => { z.classList.remove("show"); on = null; });
+})();
 
 /* Live: reload when the board changed elsewhere (another device, a file saved in a folder),
    and say what the folder watcher did. Never while a sheet is open or a card is being dragged. */
