@@ -541,3 +541,10 @@ def test_folder_watcher(tmp_path):
     for p in board()["projects"]:
         c.delete(f"/api/projects/{p['id']}")
     c.delete(f"/api/epics/{e['id']}")
+
+
+def test_numbered_copies_are_one_part():
+    from app.threemf import part_name
+    assert part_name("6.25 mm - Mounting Pillar.stl 42") == part_name("6.25 mm - Mounting Pillar.stl") \
+        == "6.25 mm - Mounting Pillar"
+    assert part_name("Bras 2") == "Bras 2"            # a number that is part of the real name stays

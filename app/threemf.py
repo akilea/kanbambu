@@ -27,8 +27,9 @@ def _num(v, cast=float, default=0):
 
 
 def part_name(name: str) -> str:
-    """Object name as a part name: no file extension, no surrounding spaces."""
-    return re.sub(r"\.(stl|3mf|step|stp|obj)$", "", (name or "").strip(), flags=re.I).strip() or "Pièce"
+    """Object name as a part name: no file extension, no surrounding spaces. Bambu Studio numbers
+    the copies of an imported object ("Pillar.stl 42"): they are all the same part."""
+    return re.sub(r"\.(stl|3mf|step|stp|obj)(\s+\d+)?$", "", (name or "").strip(), flags=re.I).strip() or "Pièce"
 
 
 def _count(names) -> dict:
