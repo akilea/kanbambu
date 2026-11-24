@@ -157,7 +157,22 @@ input.num { width: 58px; text-align: center; }
   body[data-mlane="analysed"] .w-analysed,
   body[data-mlane="printing"] .w-printing,
   body[data-mlane="done"] .w-done { display: block; }
-  body[data-mlane="parts"] .project:has(.p-side:empty) { display: none; }
+  /* only what the tab is about: cards of that lane (or pieces), in their epic and project */
+  body[data-mlane="parts"] .project:not(.has-parts), body[data-mlane="parts"] .epic:not(.has-parts),
+  body[data-mlane="analysed"] .project:not(.has-analysed), body[data-mlane="analysed"] .epic:not(.has-analysed),
+  body[data-mlane="printing"] .project:not(.has-printing), body[data-mlane="printing"] .epic:not(.has-printing),
+  body[data-mlane="done"] .project:not(.has-done), body[data-mlane="done"] .epic:not(.has-done) { display: none; }
+  /* a filtered tab always shows its cards, even in a folded project or epic */
+  .project.collapsed .p-body, .epic.collapsed .e-body { display: block; }
+  .p-head > .ib[data-act="toggle"], .p-head > svg:nth-child(2), .e-head > svg:nth-child(2) { display: none; }
+  .p-head .p-counts, .e-head .p-counts { display: none; }
+  /* compact one-line headers: name, printing mark, edit */
+  .p-head, .e-head { flex-wrap: nowrap; padding: 6px 10px; }
+  .e-head { padding: 8px 10px; }
+  .p-head > a.ib, .e-head > a.ib, .p-head [title="BOM"], .p-head .changed, .e-head [data-eact="add-project"] { display: none; }
+  .p-name, .e-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .p-head .p-sp, .e-head .p-sp { flex: 1; }
+  .e-body { padding: 8px 4px 2px 8px; }
   .lane { min-height: 0; }
   .lane:empty { display: none; }
 
@@ -236,20 +251,25 @@ input.num { width: 58px; text-align: center; }
 
 .tot { color: var(--mute); opacity: .75; font-size: .92em; }
 
-/* epics */
-.epic { border: 1px solid var(--line); border-left: 4px solid #8b5cf6; border-radius: var(--r); margin-bottom: 12px;
-        background: color-mix(in srgb, #8b5cf6 5%, transparent); }
-.e-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; cursor: pointer; user-select: none; }
-.e-head.drop { outline: 2px dashed #8b5cf6; }
+/* epics: a container band, clearly not a project */
+.epic { --epic: #7c3aed; border: 2px solid color-mix(in srgb, var(--epic) 45%, var(--line)); border-radius: 14px; margin-bottom: 14px;
+        background: color-mix(in srgb, var(--epic) 7%, var(--bg)); overflow: hidden; }
+.e-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px; cursor: pointer; user-select: none;
+          background: color-mix(in srgb, var(--epic) 18%, var(--panel)); border-bottom: 1px solid color-mix(in srgb, var(--epic) 30%, var(--line)); }
+.epic.collapsed .e-head { border-bottom: 0; }
+.e-head.drop { outline: 2px dashed var(--epic); outline-offset: -4px; }
 .e-grip { cursor: grab; color: var(--mute); }
-.e-name { font-weight: 700; font-size: 16px; }
-.e-ico { display: flex; align-items: center; justify-content: center; color: #8b5cf6; }
-.e-body { padding: 0 6px 2px; min-height: 8px; }
-.e-body .project { margin-bottom: 8px; }
+.e-tag { font-size: 10px; font-weight: 800; letter-spacing: .8px; text-transform: uppercase; color: #fff; background: var(--epic);
+         border-radius: 5px; padding: 2px 6px; }
+.e-name { font-weight: 800; font-size: 17px; color: color-mix(in srgb, var(--epic) 55%, var(--text)); }
+.e-ico { display: flex; align-items: center; justify-content: center; color: var(--epic); }
+.e-body { padding: 10px 8px 2px 14px; min-height: 8px; }
+.e-body .project { margin-bottom: 10px; }
 .epic.collapsed .e-body { display: none; }
+.epic.is-printing > .e-head { background: color-mix(in srgb, var(--printing) 14%, color-mix(in srgb, var(--epic) 14%, var(--panel))); }
 .e-empty { padding: 4px 8px 10px; }
 select { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; background: var(--bg); color: inherit; flex: 1; min-width: 0; }
-@media (max-width: 760px) { .e-head { flex-wrap: wrap; } .e-body { padding: 0 4px 2px; } }
+
 .c-parts { min-width: 0; }
 .pc { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 

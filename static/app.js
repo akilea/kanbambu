@@ -157,6 +157,16 @@ function inventoryHtml(p) {
   }).join("")}</div>`;
 }
 
+/* "has-printing", "has-parts"…: which phone tabs this project / epic has something to show in. */
+function hasClasses(ps) {
+  const out = new Set();
+  for (const p of ps) {
+    for (const c of p.cards) out.add(`has-${c.lane}`);
+    if (p.parts.length || p.bom.length) out.add("has-parts");
+  }
+  return [...out].join(" ");
+}
+
 /* An epic groups projects (e.g. several Bambu files of one build), with their combined progress. */
 function epicHtml(e) {
   const ps = epicProjects(e);
@@ -168,11 +178,12 @@ function epicHtml(e) {
   const printing = ps.reduce((a, p) => a + p.cards.filter((c) => c.lane === "printing").length, 0);
   const img = e.image || (ps.find((p) => p.image) || {}).image;
   return `
-  <section class="epic ${e.collapsed ? "collapsed" : ""} ${printing ? "is-printing" : ""}" data-epic="${e.id}">
+  <section class="epic ${e.collapsed ? "collapsed" : ""} ${printing ? "is-printing" : ""} ${hasClasses(ps)}" data-epic="${e.id}">
     <div class="e-head" data-eact="toggle" title="Glisse des .3mf ici : un projet par fichier">
       <span class="e-grip" title="Déplacer">${ic("grip-vertical")}</span>
       ${ic(e.collapsed ? "chevron-right" : "chevron-down")}
       ${img ? `<img class="p-img" src="${img}" alt="">` : `<span class="p-img e-ico">${ic("folders")}</span>`}
+      <span class="e-tag">Epic</span>
       <span class="e-name">${esc(e.name)}</span>
       ${printing ? `<span class="now-printing" title="${printing} plateau(x) en impression">${ic("printer", "sm")}${printing > 1 ? printing : ""}</span>` : ""}
       ${e.sets > 1 ? `<span class="sets" title="Exemplaires de l'epic">×${e.sets}</span>` : ""}
@@ -211,7 +222,7 @@ function projectHtml(p) {
   const bomDone = p.bom.filter((b) => b.done).length;
   const laneIcons = LANE_ICON;
   return `
-  <section class="project ${p.collapsed ? "collapsed" : ""} ${printing ? "is-printing" : ""}" data-id="${p.id}">
+  <section class="project ${p.collapsed ? "collapsed" : ""} ${printing ? "is-printing" : ""} ${hasClasses([p])}" data-id="${p.id}">
     <div class="p-head" data-act="toggle">
       <span class="p-grip" title="Déplacer">${ic("grip-vertical")}</span>
       ${ic(p.collapsed ? "chevron-right" : "chevron-down")}
