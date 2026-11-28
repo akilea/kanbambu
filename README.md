@@ -11,7 +11,7 @@ Queue → Printing → Done (✓ / ✗), avec les pièces du projet à gauche
 
 ```bash
 docker compose up -d --build
-# http://<serveur>:8080
+# http://<serveur>:8642
 ```
 
 Les données (SQLite + fichiers) vivent dans `./data`. Pour sauvegarder, copie ce dossier.
@@ -25,11 +25,13 @@ Journal : `data/kanbambu.log`. Pour l'arrêter : `tools\kanbambu-stop.bat` (ou G
 `pythonw.exe`).
 Ailleurs : `python tools/serve.py`.
 
+Port : **8642** (variable `KANBAMBU_PORT` ou `--port` pour en changer).
+
 Sans Docker :
 
 ```bash
 pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8080
+uvicorn app.main:app --host 0.0.0.0 --port 8642
 ```
 
 ## Utilisation

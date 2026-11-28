@@ -73,7 +73,8 @@ def update():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--port", type=int, default=8080)
+    # 8642 rather than the common 8080, which other apps tend to take; KANBAMBU_PORT overrides it
+    ap.add_argument("--port", type=int, default=int(os.environ.get("KANBAMBU_PORT", "8642")))
     ap.add_argument("--interval", type=int, default=300, help="secondes entre deux vérifications GitHub")
     a = ap.parse_args()
 
